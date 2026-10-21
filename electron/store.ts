@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import {bookComplete} from './book-state';
 import type { Book, BookSummary, StudySettings } from '../src/shared';
 
 export function normalizeSettings(raw:Partial<StudySettings>):StudySettings{
@@ -29,8 +30,7 @@ export class Store {
       // Fail visibly on corruption instead of silently replacing learning records.
       const book: Book = JSON.parse(readFileSync(file, 'utf8'));
       if (book.id !== id || !Array.isArray(book.pages)) throw new Error(`教材資料格式錯誤：${id}`);
-      book.generationPaused ??= this.settings.paused;
-      book.generationStarted ??= true;
+      book.generationStarted=false;
       if (book.mapStatus === 'running') book.mapStatus = 'pending';
       if (book.extraction === 'running') book.extraction = 'pending';
       for (const page of book.pages) {
@@ -39,6 +39,8 @@ export class Store {
           m.status = 'pending'; m.error = undefined;
         }
       }
+      book.generationPaused=!bookComplete(book);
+      book.pauseReason=book.generationPaused?'等待手動開始／繼續生成':undefined;
       this.books.set(id, book);
       this.save(book);
     }
@@ -75,7 +77,7 @@ export class Store {
     if (!bytes.subarray(0, 1024).toString('latin1').includes('%PDF-')) throw new Error('這不是有效的 PDF 檔案');
     const id = createHash('sha256').update(bytes).digest('hex');
     if (this.books.has(id)) return this.book(id);
-    const book: Book = { id, name: path.basename(file), count: 0, currentPage: 1, createdAt: new Date().toISOString(), extraction: 'pending', extracted: 0, mapStatus: 'pending', mapChunks: [], pages: [], generationPaused:false,generationStarted:false };
+    const book: Book = { id, name: path.basename(file), count: 0, currentPage: 1, createdAt: new Date().toISOString(), extraction: 'pending', extracted: 0, mapStatus: 'pending', mapChunks: [], pages: [], generationPaused:true,generationStarted:false };
     mkdirSync(path.join(this.root, 'books', id), { recursive: true });
     copyFileSync(file, path.join(this.root, 'books', id, 'source.pdf'));
     this.books.set(id, book); this.save(book); return book;

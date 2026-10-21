@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Book, BookMap, PageMap, Message } from '../src/shared';
 import { Store } from './store';
 import { PriorityPool } from './priority-pool';
+import {bookComplete} from './book-state';
 import {abortable,cancelled} from './cancellation';
 import {lessonGuide} from './lesson-style';
 
@@ -40,7 +41,7 @@ export function acceptsResult(book: Book, page: number, mapVersion: string, gene
 export class Engine {
   private selectedId?:string;
   get activeId(){return this.selectedId;}
-  set activeId(id:string|undefined){this.selectedId=id;if(id){const b=this.store.book(id);b.generationStarted=true;this.store.save(b);}}
+  set activeId(id:string|undefined){if(id)this.store.book(id);this.selectedId=id;}
   authenticated=false;
   activity='選擇教材，開始今天的學習';
   private jobs=new Map<string,{book:Book;kind:'lesson'|'index'|'question';controller:AbortController;page?:number;message?:Message}>();
@@ -52,19 +53,21 @@ export class Engine {
   get progress(){return {activeLessons:[...this.jobs.values()].filter(j=>j.kind==='lesson').length,indexing:[...this.jobs.values()].some(j=>j.kind==='index'),modelActive:this.pool.snapshot.active,modelQueued:this.pool.snapshot.queued};}
   bookState(book:Book):'running'|'paused'|'complete'|'waiting'{
     if(book.generationPaused)return 'paused';
-    if(book.mapStatus==='done'&&book.count>0&&book.pages.every(p=>p.status==='done'&&p.messages.every(m=>m.status==='done'||m.status==='error')))return 'complete';
+    if(bookComplete(book))return 'complete';
     return this.authenticated&&book.generationStarted?'running':'waiting';
   }
   activityFor(book:Book){
     if(book.generationPaused)return book.pauseReason||'本教材已暫停';
     if(this.bookState(book)==='complete')return '本教材講解已準備完成';
+    if(!book.generationStarted)return '等待手動開始／繼續生成';
     if(!this.authenticated)return '等待 ChatGPT 連線';
-    return `本教材生成中 · 已分析 ${book.map?.pages.length??0}/${book.count||'…'} 頁`;
+    return '本教材生成中';
   }
   wake(){
     if(this.stopping)return;
     this.pool.setCapacity(this.store.settings.aiConcurrency);
-    const books=[...this.store.books.values()].filter(b=>b.generationStarted||b.id===this.activeId);
+    if(this.activeId){const b=this.store.book(this.activeId);if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}}
+    const books=[...this.store.books.values()].filter(b=>b.generationStarted);
     for(const b of books)if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}
     if(this.activeId&&this.store.books.has(this.activeId))this.activity=this.activityFor(this.store.book(this.activeId));
     if(!this.authenticated)return;
@@ -73,6 +76,7 @@ export class Engine {
       for(let i=0;i<books.length;i++){
         const at=(this.cursor+i)%books.length,book=books[at];
         if(book.generationPaused)continue;
+        if(book.mapStatus==='error'||book.pages.some(p=>p.status==='error')){this.pauseBook(book.id,'有未完成工作，請按繼續生成重試');continue;}
         if(this.schedule(book)){this.cursor=(at+1)%books.length;started=true;break;}
       }
       if(!started)break;
@@ -122,9 +126,15 @@ export class Engine {
     this.persist(book);this.onPause(book);
   }
   resumeBook(id:string){
-    const book=this.store.book(id);book.generationPaused=false;book.pauseReason=undefined;book.generationStarted=true;
+    const book=this.store.book(id);book.generationPaused=false;book.pauseReason=undefined;book.generationStarted=true;book.mapError=undefined;book.extractionError=undefined;
     if(book.mapStatus==='error'){book.mapStatus='pending';book.mapError=undefined;}
-    for(const page of book.pages)if(page.status==='error'){page.status='pending';page.error=undefined;}
+    if(book.mapStatus==='done'&&(!book.map||book.map.complete===false||book.map.pages.length<book.count))book.mapStatus='pending';
+    if(book.extraction==='error'){book.extraction='pending';book.extractionError=undefined;}
+    for(const page of book.pages){
+      page.error=undefined;
+      if(page.status==='error'){page.status='pending';page.error=undefined;}
+      for(const message of page.messages)if(message.status==='error'){message.status='pending';message.error=undefined;}
+    }
     this.persist(book);this.wake();
   }
   connectionLost(message:string){

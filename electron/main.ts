@@ -25,14 +25,15 @@ function pausePDF(id:string){
   const stop=loader.stop().finally(()=>{if(stoppingPDF.get(id)===stop)stoppingPDF.delete(id);changed();});stoppingPDF.set(id,stop);return stop;
 }
 const saveTimers = new Map<string, NodeJS.Timeout>();
-let authReading = false;
+let authReading:Promise<void>|undefined;
 let changeTimer:NodeJS.Timeout|undefined;
 const changed = () => { if(changeTimer)return;changeTimer=setTimeout(()=>{changeTimer=undefined;if(win&&!win.isDestroyed())win.webContents.send('study:change');},60); };
 function saveSoon(id:string){if(saveTimers.has(id))return;saveTimers.set(id,setTimeout(()=>{saveTimers.delete(id);store.save(store.book(id));},250));}
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 
-async function readAuth() {
-  if (authReading) return; authReading = true;
+function readAuth():Promise<void> {
+  if(authReading)return authReading;
+  authReading=(async()=>{
   try {
     await client.start();
     const result = await client.call('account/read', { refreshToken: false });
@@ -48,12 +49,14 @@ async function readAuth() {
   } catch (e) {
     auth = { ...auth, connected: false, label: '連線需要處理', error: e instanceof Error ? e.message : String(e) };
     engine.connectionLost(auth.error||'連線失敗'); changed();
-  } finally { authReading = false; }
+  }
+  })();
+  const request=authReading;void request.finally(()=>{if(authReading===request)authReading=undefined;});return request;
 }
-function extract(id: string) {
+function extract(id: string,previewOnly=false) {
   if (workers.has(id)) return;
   const b = store.book(id);
-  if (b.extraction === 'done' || b.generationPaused) return;
+  if (b.extraction === 'done' || (b.generationPaused&&!previewOnly)) return;
   b.extraction = 'running'; b.extractionError = undefined; store.save(b); changed();
   const failed = (error: string) => { b.extraction = 'error'; b.extractionError = error; store.save(b); changed(); workers.delete(id);engine.pauseBook(id,error); };
   const loader = new PDFLoader(path.join(app.getAppPath(),'electron/pdf-worker.mjs'),b,store.dir(id),store.settings.pdfWorkers,msg=>{
@@ -88,11 +91,11 @@ function registerIPC() {
   handle('study:import', async () => {
     const choice = await dialog.showOpenDialog(win!, { title: '選擇你的教材', filters: [{ name: 'PDF 教材', extensions: ['pdf'] }], properties: ['openFile'] });
     if (choice.canceled) return null;
-    const book = store.import(choice.filePaths[0]); engine.activeId = book.id; extract(book.id); engine.wake(); changed(); return book.id;
+    const book = store.import(choice.filePaths[0]); engine.activeId = book.id; extract(book.id,true); engine.wake(); changed(); return book.id;
   });
   handle('study:navigate', (id: string, value: number) => {
     const b = store.book(id); b.currentPage = pageNumber(id,value); store.save(b); engine.activeId = id;
-    if (b.extraction === 'pending') extract(id);
+
     changed(); engine.wake();
   });
   handle('study:login', async () => {
@@ -127,7 +130,7 @@ function registerIPC() {
     }
     changed();
   });
-  handle('study:retry', (id: string, value?: number) => {
+  handle('study:retry', async(id: string, value?: number) => {
     const b = store.book(id);
     if (value !== undefined) { const p = b.pages[pageNumber(id,value)-1]; if (p.status === 'running') return; p.status = 'pending'; p.error = undefined; }
     else {
@@ -135,7 +138,10 @@ function registerIPC() {
       if (b.mapStatus === 'error') { b.mapStatus = 'pending'; b.mapError = undefined; }
       for (const p of b.pages) if (p.status === 'error') { p.status = 'pending'; p.error = undefined; }
     }
-    store.save(b); engine.activeId = id; changed(); engine.wake();
+    store.save(b); engine.activeId = id;
+    if(!engine.authenticated)await readAuth();
+    if(!engine.authenticated)throw new Error(auth.error||'請先連接 ChatGPT。');
+    await stoppingPDF.get(id);engine.resumeBook(id);extract(id);changed();
   });
   handle('study:ask', async (id: string, value: number, question: string, kind: 'question' | 'exercise') => {
     if (typeof question !== 'string' || (kind !== undefined && !['question','exercise'].includes(kind))) throw new Error('問題格式無效');
@@ -199,7 +205,7 @@ app.whenReady().then(async () => {
   if (process.env.VITE_DEV_SERVER_URL) await win.loadURL(process.env.VITE_DEV_SERVER_URL);
   else await win.loadFile(path.join(app.getAppPath(), 'dist/index.html'));
   if (!process.env.STUDY_WINDOWED) win.maximize();
-  for(const book of store.books.values())if(book.generationStarted&&!book.generationPaused&&(book.extraction==='pending'||book.extraction==='error'))extract(book.id);
+
   void readAuth();
 }).catch(error => { dialog.showErrorBox('Study Project 無法啟動', `${error.message}\n原有資料未被覆寫。`); app.quit(); });
 let shuttingDown = false;

@@ -15,6 +15,7 @@ function setup(count = 3) {
   const file = path.join(dir,'lecture.pdf'); writeFileSync(file,'%PDF-1.4\nfixture');
   const store = new Store(path.join(dir,'library')); const book = store.import(file);
   store.updateSettings({aiConcurrency:1});
+  book.generationPaused=false;
   book.count = count; book.extraction = 'done'; book.extracted = count;
   book.pages = Array.from({length:count},(_,i) => ({ number:i+1,text:`原頁${i+1}`,width:100,height:100,imageReady:true,lesson:'',status:'pending',messages:[] }));
   store.save(book);
@@ -63,7 +64,7 @@ test('in-flight lesson stays on original page after navigation; cache revisit ma
   try {
     withMap(f.book); let calls=0; let release:(value:string)=>void=()=>{};
     const provider:Provider={generate:async()=>{calls++; return new Promise<string>(r=>release=r);}};
-    engine=new Engine(f.store,provider,()=>{},()=>{}); engine.activeId=f.book.id; engine.authenticated=true; engine.wake();
+    engine=new Engine(f.store,provider,()=>{},()=>{}); engine.activeId=f.book.id;f.book.generationStarted=true; engine.authenticated=true; engine.wake();
     await until(()=>calls===1); f.book.currentPage=2; f.book.generationPaused=true; release('第一頁的講稿');
     await until(()=>f.book.pages[0].status==='done');
     assert.equal(f.book.pages[0].lesson,'第一頁的講稿'); assert.equal(f.book.pages[1].lesson,'');
@@ -88,7 +89,7 @@ test('available pages get lessons and accept questions before remaining images o
       if(prompt.includes('撰寫一對一')){f.book.generationPaused=true;return '第一頁已經可以閱讀';}
       return '可以先回答這一頁';
     }};
-    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>f.book.pages[0].status==='done');
     assert.equal(f.book.extraction,'running');assert.equal(f.book.map?.complete,false);assert.equal(f.book.map?.pages.length,2);
     assert.equal(f.book.pages[0].contextComplete,false);assert.equal(f.book.pages[0].contextPages,2);
@@ -122,7 +123,7 @@ test('a fully cached book issues no model request even with generation enabled',
   try {
     withMap(f.book);for(const p of f.book.pages){p.status='done';p.lesson='已保存';}
     let calls=0;engine=new Engine(f.store,{generate:async()=>{calls++;return 'unexpected';}},()=>{},()=>{});
-    engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     assert.equal(calls,0);assert.equal(engine.activity,'本教材講解已準備完成');
   } finally {engine?.stop();f.cleanup();}
 });
@@ -131,7 +132,7 @@ test('repeated provider failures pause background work instead of failing every 
   try {
     withMap(f.book);let calls=0;
     engine=new Engine(f.store,{generate:async()=>{calls++;throw new Error('Provider rejected request');}},()=>{},()=>{});
-    engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>f.book.generationPaused===true);
     assert.equal(calls,1);assert.equal(f.book.pages.filter(p=>p.status==='pending').length,20);
     assert.equal(f.book.generationPaused,true);
@@ -142,7 +143,7 @@ test('shutdown returns interrupted lessons to pending for automatic continuation
   try {
     withMap(f.book);let reject:(error:Error)=>void=()=>{};
     engine=new Engine(f.store,{generate:async()=>new Promise<string>((_resolve,r)=>reject=r)},()=>{},()=>{});
-    engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>f.book.pages[0].status==='running');engine.stop();reject(new Error('Connection closed'));
     await until(()=>f.book.pages[0].status==='pending');
     assert.equal(new Store(f.store.root).book(f.book.id).pages[0].status,'pending');
@@ -157,7 +158,7 @@ test('indexing starts with the page the reader jumped to rather than assuming a 
       f.book.generationPaused=true;
       return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
     }};
-    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>!!f.book.map);assert.deepEqual(f.book.map!.pages.map(p=>p.page),[70,71]);
     assert.equal(f.book.mapChunks.flat().length,2);
   }finally{engine?.stop();f.cleanup();}
@@ -173,7 +174,7 @@ test('a final map arriving during a lesson preserves that answer and its partial
       if(schema?.properties?.links){f.book.generationPaused=true;return JSON.stringify({overview:'全書完成',terms:[],links:[1,2,3,4].map(page=>({page,relatedPages:[]}))});}
       return new Promise<string>(resolve=>finishLesson=resolve);
     }};
-    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>f.book.mapStatus==='done');finishLesson('原頁講解，不應因地圖擴充而丟失');
     await until(()=>f.book.pages[0].status==='done');
     assert.equal(f.book.pages[0].contextComplete,false);assert.equal(f.book.pages[0].contextPages,2);
@@ -192,7 +193,7 @@ test('an old partially analyzed book exposes its saved index immediately without
   const f=setup(8);let engine:Engine|undefined;
   try{
     f.book.mapChunks=[[{page:1,topic:'已分析',summary:'既有紀錄',terms:[],relatedPages:[]}]];
-    let calls=0;engine=new Engine(f.store,{generate:async()=>{calls++;return '';}},()=>{},()=>{});engine.activeId=f.book.id;engine.wake();
+    let calls=0;engine=new Engine(f.store,{generate:async()=>{calls++;return '';}},()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.wake();
     assert.equal(f.book.map?.pages[0].topic,'已分析');assert.equal(f.book.map?.complete,false);assert.equal(calls,0);
   }finally{engine?.stop();f.cleanup();}
 });
@@ -210,7 +211,7 @@ test('four lessons overlap, finish out of order, and remain attached to original
     engine=new Engine(f.store,{generate:async(prompt)=>{
       const n=Number(prompt.match(/針對第 (\d+) 頁撰寫/)![1]);
       return new Promise<string>(resolve=>releases.set(n,resolve));
-    }},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    }},()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>releases.size===4);assert.equal(engine.progress.modelActive,4);assert.equal(engine.progress.activeLessons,4);
     f.book.generationPaused=true;f.book.currentPage=6;
     for(const n of [4,2,3,1]){releases.get(n)!(`page ${n}`);await until(()=>f.book.pages[n-1].status==='done');}
@@ -286,7 +287,7 @@ test('a late lesson after book deletion cannot recreate files or overwrite a rei
   const f=setup();let engine:Engine|undefined;
   try{
     withMap(f.book);let finish:(text:string)=>void=()=>{};
-    engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>finish=r)},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>finish=r)},()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>engine!.progress.modelActive===1);const id=f.book.id,dir=f.store.dir(id);
     engine.activeId=undefined;f.store.deleteBook(id);const fresh=f.store.import(f.file);finish('deleted lesson must not return');
     await until(()=>engine!.progress.activeLessons===0);
@@ -297,7 +298,7 @@ test('a late lesson after book deletion cannot recreate files or overwrite a rei
 test('a late index result cannot recreate a deleted book',async()=>{
   const f=setup();let engine:Engine|undefined;
   try{
-    let finish:(text:string)=>void=()=>{};engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>finish=r)},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    let finish:(text:string)=>void=()=>{};engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>finish=r)},()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>engine!.progress.modelActive===1);const dir=f.store.dir(f.book.id);engine.activeId=undefined;f.store.deleteBook(f.book.id);
     finish(JSON.stringify({pages:[1,2].map(page=>({page,topic:'topic',summary:'summary',terms:[],relatedPages:[]}))}));
     await until(()=>!engine!.progress.indexing);assert.equal(existsSync(dir),false);assert.equal(f.store.summaries().length,0);
@@ -310,7 +311,7 @@ test('pause aborts all page requests immediately; resume retries only unfinished
   try{
     withMap(f.book);f.store.updateSettings({aiConcurrency:2});f.book.pages[3].status='done';f.book.pages[3].lesson='cached';
     const releases:Array<(s:string)=>void>=[],signals:AbortSignal[]=[];let calls=0;
-    engine=new Engine(f.store,{generate:async(_p,_i,_m,_r,_d,_s,signal)=>{calls++;signals.push(signal!);return new Promise<string>(r=>releases.push(r));}},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    engine=new Engine(f.store,{generate:async(_p,_i,_m,_r,_d,_s,signal)=>{calls++;signals.push(signal!);return new Promise<string>(r=>releases.push(r));}},()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
     await until(()=>calls===2);engine.pauseBook(f.book.id);assert.ok(signals.every(s=>s.aborted));assert.equal(f.book.pages.filter(p=>p.status==='running').length,0);
     await until(()=>engine!.progress.modelActive===0);for(const release of releases)release('old result');
     await new Promise(r=>setTimeout(r,40));assert.equal(calls,2);assert.equal(f.book.pages[0].lesson,'');assert.equal(f.book.pages[3].lesson,'cached');
@@ -319,14 +320,14 @@ test('pause aborts all page requests immediately; resume retries only unfinished
   }finally{engine?.stop();f.cleanup();}
 });
 function anotherBook(f:ReturnType<typeof setup>){
-  const file=path.join(f.dir,'second.pdf');writeFileSync(file,'%PDF-1.4 second');const book=f.store.import(file);book.count=1;book.extraction='done';book.extracted=1;
+  const file=path.join(f.dir,'second.pdf');writeFileSync(file,'%PDF-1.4 second');const book=f.store.import(file);book.generationPaused=false;book.count=1;book.extraction='done';book.extracted=1;
   book.pages=[{number:1,text:'第二份',width:100,height:100,imageReady:true,lesson:'',status:'pending',messages:[]}];withMap(book);return book;
 }
 test('switching books keeps earlier work running; each book has independent pause and total concurrency is bounded',async()=>{
   const f=setup(2);let engine:Engine|undefined;
   try{
     withMap(f.book);const second=anotherBook(f);second.generationPaused=true;f.store.updateSettings({aiConcurrency:2});const releases:Array<()=>void>=[];
-    engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>releases.push(()=>r('完成')))},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();await until(()=>releases.length===2);
+    engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>releases.push(()=>r('完成')))},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;f.book.generationStarted=true;engine.wake();await until(()=>releases.length===2);
     engine.activeId=second.id;engine.wake();assert.equal(engine.bookState(f.book),'running');assert.equal(engine.bookState(second),'paused');
     releases[0]();releases[1]();await until(()=>engine!.bookState(f.book)==='complete');assert.equal(second.pages[0].status,'pending');
     engine.resumeBook(second.id);await until(()=>releases.length===3);assert.ok(engine.progress.modelActive<=2);releases[2]();await until(()=>engine!.bookState(second)==='complete');
@@ -336,7 +337,7 @@ test('quota failure pauses just that book and one resume retries the failed page
   const f=setup(1);let engine:Engine|undefined;
   try{
     withMap(f.book);const second=anotherBook(f);second.generationStarted=true;f.store.updateSettings({aiConcurrency:2});let failures=0;
-    engine=new Engine(f.store,{generate:async prompt=>{if(prompt.includes(`教材：${f.book.name}`)&&failures++===0)throw new Error('usage limit reached');return '完成';}},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();
+    engine=new Engine(f.store,{generate:async prompt=>{if(prompt.includes(`教材：${f.book.name}`)&&failures++===0)throw new Error('usage limit reached');return '完成';}},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;f.book.generationStarted=true;engine.wake();
     await until(()=>f.book.generationPaused===true&&second.pages[0].status==='done');assert.match(f.book.pauseReason!,/usage limit/);assert.equal(second.generationPaused,false);
     engine.resumeBook(f.book.id);await until(()=>f.book.pages[0].status==='done');assert.equal(f.book.generationPaused,false);
   }finally{engine?.stop();f.cleanup();}
@@ -344,9 +345,9 @@ test('quota failure pauses just that book and one resume retries the failed page
 test('offline interruption persists per-book pause and unfinished work across restart',async()=>{
   const f=setup(1);let engine:Engine|undefined;
   try{
-    withMap(f.book);engine=new Engine(f.store,{generate:async()=>new Promise<string>(()=>{})},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();
+    withMap(f.book);engine=new Engine(f.store,{generate:async()=>new Promise<string>(()=>{})},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;f.book.generationStarted=true;engine.wake();
     await until(()=>engine!.progress.modelActive===1);engine.connectionLost('network offline');await until(()=>engine!.progress.modelActive===0);
-    const restored=new Store(f.store.root).book(f.book.id);assert.equal(restored.generationPaused,true);assert.match(restored.pauseReason!,/network offline/);assert.equal(restored.pages[0].status,'pending');
+    const restored=new Store(f.store.root).book(f.book.id);assert.equal(restored.generationPaused,true);assert.equal(restored.generationStarted,false);assert.match(restored.pauseReason!,/手動/);assert.equal(restored.pages[0].status,'pending');
   }finally{engine?.stop();f.cleanup();}
 });
 test('a failed question resumes in the same record without duplicating history',async()=>{
@@ -367,7 +368,47 @@ test('a cancelled queued request never reaches the provider',async()=>{
 
 test('normal shutdown disconnect does not turn running books into a persisted error pause',()=>{
   const f=setup();let engine:Engine|undefined;try{
-    engine=new Engine(f.store,{generate:async()=>''},()=>{},()=>{});engine.activeId=f.book.id;engine.stop();engine.connectionLost('normal process close');
-    assert.equal(f.book.generationPaused,false);assert.equal(new Store(f.store.root).book(f.book.id).generationPaused,false);
+    engine=new Engine(f.store,{generate:async()=>''},()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.stop();engine.connectionLost('normal process close');
+    assert.equal(f.book.generationPaused,false);assert.equal(new Store(f.store.root).book(f.book.id).generationPaused,true);
+  }finally{engine?.stop();f.cleanup();}
+});
+
+
+test('startup and selecting a legacy running book never enroll it for automatic generation',()=>{
+  const f=setup(3);let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.book.generationStarted=true;f.book.generationPaused=false;f.store.save(f.book);
+    const store=new Store(f.store.root),book=store.book(f.book.id);let calls=0;
+    engine=new Engine(store,{generate:async()=>{calls++;return 'unexpected';}},()=>{},()=>{});engine.authenticated=true;engine.activeId=book.id;engine.wake();
+    store.updateSettings({aiConcurrency:6});engine.wake();assert.equal(calls,0);assert.equal(book.generationStarted,false);assert.equal(book.generationPaused,true);assert.equal(engine.bookState(book),'paused');
+  }finally{engine?.stop();f.cleanup();}
+});
+test('one explicit resume repairs legacy quota errors and finishes missing index and lessons without regenerating cache',async()=>{
+  const f=setup(4);let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.book.map!.pages=f.book.map!.pages.slice(0,2);f.book.map!.complete=false;f.book.mapChunks=[f.book.map!.pages];f.book.mapStatus='error';f.book.mapError='old quota';
+    f.book.pages[0].status='done';f.book.pages[0].lesson='cached lesson';for(const p of f.book.pages.slice(1)){p.status='error';p.error='old usage limit';}
+    f.book.generationStarted=true;f.store.save(f.book);const store=new Store(f.store.root),book=store.book(f.book.id);let calls=0;
+    engine=new Engine(store,{generate:async(_prompt,images,_model,_instructions,_delta,schema:any)=>{
+      calls++;if(schema?.properties?.pages)return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'主題',summary:'重點',terms:[],relatedPages:[],density:'brief'}))});
+      if(schema?.properties?.links)return JSON.stringify({overview:'完整',terms:[],links:[1,2,3,4].map(page=>({page,relatedPages:[]}))});return 'new lesson';
+    }},()=>{},()=>{});engine.authenticated=true;engine.activeId=book.id;engine.wake();assert.equal(calls,0);
+    engine.resumeBook(book.id);await until(()=>engine!.bookState(book)==='complete');assert.equal(book.pages[0].lesson,'cached lesson');assert.equal(book.pages.filter(p=>p.status==='done').length,4);assert.equal(book.mapStatus,'done');assert.equal(book.mapError,undefined);
+  }finally{engine?.stop();f.cleanup();}
+});
+test('legacy error states report paused rather than a false running state with zero work',()=>{
+  const f=setup();let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.book.pages[1].status='error';f.book.pages[1].error='old quota';f.book.generationStarted=true;let calls=0;
+    engine=new Engine(f.store,{generate:async()=>{calls++;return '';}},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();assert.equal(calls,0);assert.equal(engine.bookState(f.book),'paused');
+  }finally{engine?.stop();f.cleanup();}
+});
+
+
+test('manual resume clears stale error text even when legacy statuses already say pending',()=>{
+  const f=setup(2);let engine:Engine|undefined;try{
+    withMap(f.book);f.book.mapError='stale map quota';f.book.extractionError='stale extraction error';for(const p of f.book.pages)p.error='stale page quota';
+    engine=new Engine(f.store,{generate:async()=>new Promise<string>(()=>{})},()=>{},()=>{});engine.authenticated=true;engine.resumeBook(f.book.id);
+    assert.equal(f.book.mapError,undefined);assert.equal(f.book.extractionError,undefined);assert.ok(f.book.pages.every(p=>p.error===undefined));
   }finally{engine?.stop();f.cleanup();}
 });

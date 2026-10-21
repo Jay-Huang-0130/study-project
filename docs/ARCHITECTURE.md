@@ -1,4 +1,4 @@
-# 0.5.0 架構與限制
+# 0.5.1 架構與限制
 
 ## 程序分工
 
@@ -69,7 +69,7 @@ StudyProjectData/
 
 ## 啟動與資料位置
 
-桌面捷徑直接啟動 `release/app-0.5.0/Study Project.exe`，用 `--study-data-dir=` 沿用既有教材目錄，避免單檔每次解壓與書庫位置改變。專案內 `Start-Study.cmd` 為備用入口，資料位置指標位於未提交的 release/data-location.txt。
+桌面捷徑直接啟動 `release/app-0.5.1/Study Project.exe`，用 `--study-data-dir=` 沿用既有教材目錄，避免單檔每次解壓與書庫位置改變。專案內 `Start-Study.cmd` 為備用入口，資料位置指標位於未提交的 release/data-location.txt。
 
 ## 逐筆刪除問答
 
@@ -83,10 +83,18 @@ StudyProjectData/
 
 ## 教材級中斷與續作
 
-每份 Book 保存 `generationStarted`、`generationPaused`、`pauseReason`，狀態及原因跨重開保留。舊全域 paused 設定只用於第一次遷移沒有教材級狀態的資料。
+每份 Book 保存 `generationStarted`、`generationPaused`、`pauseReason`。0.5.1 每次開啟書庫會清除前次 generationStarted，未完成教材標示等待手動開始／繼續，完整快取仍可閱讀。新工作階段不會因選取、登入或設定更新而自動啟動；本次經使用者啟動的教材才加入背景輪替。
 
 每項工作有獨立 AbortController。暫停取消排隊項目、向在途 Provider 發出 abort，並將未完成講稿和問答恢復為 pending；已完成快取不變。Codex Provider 依 [官方 App Server 中斷協定](https://learn.chatgpt.com/docs/app-server#interrupt-a-turn) 送出對應 threadId 與 turnId 的 `turn/interrupt`。若暫停發生在 turn/start 回覆之前，待取得 turnId 後補送中斷，再解除訂閱。取消後忽略所有延遲串流與結果；中斷問答續作時使用新的 generationId，避免舊串流混入。
 
 取消指令需要傳到伺服器，不能承諾遠端在零延遲內停止或退還已用額度；本機立即停止接受該工作進度。PDF Worker 停止後將解析標記 pending，繼續時利用已有圖像重新載入缺少部分。
 
 續作會清理舊版 error 狀態並重新排程。中斷問答沿用原紀錄 ID 及練習來源範圍；不建立重複對話。尚未完成的頁／批次重新生成，不宣稱可從遠端模型的同一 token 位置續跑。
+
+## 0.5.1 手動啟動與舊版資料修復
+
+`activeId` 僅決定閱讀位置，不再隱含啟用背景工作。模型排程只接受本次已由 resumeBook 啟動的教材。App 啟動及普通翻頁不啟動 PDF Worker；明確匯入新檔時可做本機預覽，仍不啟動 AI。
+
+繼續會恢復舊 map/page error 及未完成問答、移除各層殘留錯誤文字，並檢查被標成 done 的部分地圖是否仍不完整。若排程發現舊 error 卻沒有暫停標記，改為明確暫停而非顯示假生成中。完成判定要求完整地圖、全部頁講稿與問答皆完成。
+
+頁面正文移除導讀和保存說明；覆蓋資訊仍保存在 Page，頁碼提示可查看。頂部只保留已完成講稿數；重新產生入口移至講解工具列圖示。
