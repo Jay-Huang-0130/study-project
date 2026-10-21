@@ -98,3 +98,11 @@ StudyProjectData/
 繼續會恢復舊 map/page error 及未完成問答、移除各層殘留錯誤文字，並檢查被標成 done 的部分地圖是否仍不完整。若排程發現舊 error 卻沒有暫停標記，改為明確暫停而非顯示假生成中。完成判定要求完整地圖、全部頁講稿與問答皆完成。
 
 頁面正文移除導讀和保存說明；覆蓋資訊仍保存在 Page，頁碼提示可查看。頂部只保留已完成講稿數；重新產生入口移至講解工具列圖示。
+
+## 0.6.0 閱讀呈現與發行
+
+字級以 uiScale / readingFontSize 儲存在現有本機 settings.json。主程序獨立驗證範圍，renderer 的 CSS variables 分別套用介面與標題、閱讀內文，PDF canvas 渲染比例維持原設定。舊設定缺少欄位時使用 100% 與 13px。
+
+PDFViewer 在載入文件後讀取 getOutline，命名 destination 透過 getDestination 與 getPageIndex 轉成實體頁碼。只在當前 renderer session 記憶，不寫入教材、不呼叫 AI。reading-outline.ts 將書籤樹與既有逐頁索引合併，無目錄時回退每 8 頁分組；摘要為已有文字第一句／最多 64 字，並非新生成的章節摘要。畫面不再直接輸出密集 overview；底層 overview 及完整術語仍供原教學流程使用。
+
+GitHub Actions 在 Windows runner 安裝鎖定依賴並測試打包，使用 repository contents 寫入權限發布 portable EXE 和 SHA256SUMS。固定下載檔名與每個版本 tag 分離；不含個人書庫和登入狀態。

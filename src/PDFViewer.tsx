@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
 import workerURL from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import type { OutlineEntry } from './shared';
 GlobalWorkerOptions.workerSrc = workerURL;
 
-export function PDFViewer({ id, page, zoom }: { id: string; page: number; zoom: number }) {
+export function PDFViewer({ id, page, zoom, onOutline }: { id: string; page: number; zoom: number; onOutline:(id:string,entries:OutlineEntry[])=>void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const container = useRef<HTMLDivElement>(null);
   const [pdf,setPDF] = useState<PDFDocumentProxy>();
@@ -16,9 +17,28 @@ export function PDFViewer({ id, page, zoom }: { id: string; page: number; zoom: 
       cMapUrl: new URL('pdf-assets/cmaps/',document.baseURI).href, cMapPacked: true,
       standardFontDataUrl: new URL('pdf-assets/standard_fonts/',document.baseURI).href });
     let alive = true;
-    void task.promise.then(value => { if (alive) setPDF(value); }).catch(e => { if (alive) setError(e.message); });
+    void task.promise.then(async value => {
+      if (!alive) return; setPDF(value);
+      try {
+        const resolve=async(entries:Awaited<ReturnType<PDFDocumentProxy['getOutline']>>):Promise<OutlineEntry[]>=>{
+          const result:OutlineEntry[]=[];
+          for(const entry of entries??[]){
+            const children=await resolve(entry.items);
+            try {
+              const dest=typeof entry.dest==='string'?await value.getDestination(entry.dest):entry.dest;
+              const ref=dest?.[0];
+              const target=typeof ref==='number'?ref+1:ref?await value.getPageIndex(ref)+1:undefined;
+              if(target&&target>=1&&target<=value.numPages)result.push({title:entry.title,page:target,children});
+              else result.push(...children);
+            }catch{result.push(...children);}
+          }
+          return result;
+        };
+        const entries=await resolve(await value.getOutline());if(alive)onOutline(id,entries);
+      }catch{if(alive)onOutline(id,[]);}
+    }).catch(e => { if (alive) setError(e.message); });
     return () => { alive = false; void task.destroy(); };
-  },[id]);
+  },[id,onOutline]);
   useEffect(() => {
     if (!container.current) return;
     const observer = new ResizeObserver(entries => setWidth(entries[0].contentRect.width));

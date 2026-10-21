@@ -1,7 +1,8 @@
 export type Status = 'pending' | 'running' | 'done' | 'error';
 export type GenerationState = 'running' | 'paused' | 'complete' | 'waiting';
 export type LessonDetail = 'concise' | 'standard' | 'detailed';
-export interface StudySettings { paused:boolean; model:string; aiConcurrency:number; pdfWorkers:number; lessonDetail:LessonDetail }
+export interface StudySettings { paused:boolean; model:string; aiConcurrency:number; pdfWorkers:number; lessonDetail:LessonDetail; uiScale:number; readingFontSize:number }
+export interface OutlineEntry { title:string; page:number; children:OutlineEntry[] }
 export interface RuntimeStatus { activeLessons:number; indexing:boolean; modelActive:number; modelQueued:number; pdfWorkers:number }
 export interface Message { id: string; question: string; answer: string; status: Status; error?: string; createdAt: string; kind: 'question' | 'exercise'; sourcePages?: number[]; generationId?:string }
 export interface Page { number: number; text: string; width: number; height: number; imageReady: boolean; lesson: string; status: Status; error?: string; mapVersion?: string; model?: string; messages: Message[]; generationId?: string; contextPages?: number; contextComplete?: boolean; lessonDetail?:LessonDetail }

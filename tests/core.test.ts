@@ -200,7 +200,7 @@ test('an old partially analyzed book exposes its saved index immediately without
 
 
 test('legacy settings migrate to bounded parallelism and concise lessons',()=>{
-  assert.deepEqual(normalizeSettings({model:'saved',paused:true}),{model:'saved',paused:true,aiConcurrency:4,pdfWorkers:2,lessonDetail:'concise'});
+  assert.deepEqual(normalizeSettings({model:'saved',paused:true}),{model:'saved',paused:true,aiConcurrency:4,pdfWorkers:2,lessonDetail:'concise',uiScale:100,readingFontSize:13});
   const bad=normalizeSettings({aiConcurrency:99,pdfWorkers:0,lessonDetail:'bad' as any});
   assert.equal(bad.aiConcurrency,4);assert.equal(bad.pdfWorkers,2);assert.equal(bad.lessonDetail,'concise');
 });

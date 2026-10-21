@@ -2,11 +2,19 @@
 
 個人 AI 讀書導師：在同一視窗自由閱讀 PDF，對照逐頁文字講解並隨時追問。全書脈絡、背景生成與本機保存，讓閱讀能接續進行。
 
-目前版本為 Windows x64 桌面 Alpha（0.5.1）。閱讀與本機保存已完成實作及測試；OAuth 登入入口、教材脈絡與模型生成流程已串接，真實帳號授權後的完整教學品質仍待驗證。
+目前版本為 Windows x64 桌面 Alpha（0.6.0）。閱讀與本機保存已完成實作及測試；OAuth 登入入口、教材脈絡與模型生成流程已串接，真實帳號授權後的完整教學品質仍待驗證。
+
+## 給朋友下載
+
+前往 **[最新發行版](https://github.com/Jay-Huang-0130/study-project/releases/latest)**，下載 `Study-Project-Windows.exe`（Windows x64），放入可寫入的資料夾後雙擊即可。**不需要安裝 Node.js、Git 或下載原始碼。** Releases 頁的 Source code 壓縮檔是開發原始碼。
+
+固定下載入口：[下載 Windows 版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Windows.exe)。每位使用者使用自己的 ChatGPT 帳號登入、自己的額度與本機教材。程式尚未簽章，Windows 可能顯示未知發行者。
+
+更新時關閉 App，將新執行檔放回原資料夾，即可沿用旁邊的 `StudyProjectData`。這是下載新版後替換檔案，目前沒有 App 內自動更新。
 
 ## 直接使用
 
-1. 雙擊桌面的 **Study Project** 捷徑，或專案內的 `Start-Study.cmd`。入口優先使用 `release/app-0.5.1/Study Project.exe`，不必每次解壓；也可單獨執行 `release/Study-Project-0.5.1-Windows.exe`。
+1. 雙擊桌面的 **Study Project** 捷徑，或專案內的 `Start-Study.cmd`。入口優先使用 `release/app-0.6.0/Study Project.exe`，不必每次解壓；也可單獨執行 `release/Study-Project-0.6.0-Windows.exe`。
 2. 開啟右上角設定，按「使用 ChatGPT 登入」，在系統瀏覽器完成登入後回到程式。
 3. 左下角圓形書庫按鈕可展開教材清單；選擇後自動收起。書庫浮在閱讀畫面上，不占 PDF 與講解寬度。匯入 PDF。可先翻閱本機預覽；按右下角「開始生成／繼續生成」後，才會送出教材 AI 請求。
 4. 使用底部頁碼或左右方向鍵翻頁，在右側提問；已完成的講稿與問答會自動保存。
@@ -81,3 +89,13 @@ npm run package
 ## 從哪裡開始
 
 先閱讀 SPEC.md，再查看 DEVLOG.md 的「目前進度」與「下一步」。每次工作完成後更新紀錄，避免只靠聊天記住進度。
+
+## 字級與教材目錄
+
+設定中的「固定介面／標題」可調 80–150%，「閱讀內文」可調 12–26 px，兩組互相獨立並自動保存。PDF 縮放仍由左側控制。
+
+教材脈絡改為可展開目錄：優先顯示 PDF 內建章節與小節，再展開頁面與一句摘要；沒有內建目錄時，每 8 頁一組，依已有索引顯示主題，不猜測章節。摘要最多 64 字，完整講解由點選頁面閱讀；可搜尋主題、摘要、頁碼。未分析頁仍可跳轉閱讀 PDF，開啟目錄不會呼叫模型。
+
+## 發行自動化
+
+詳見 [發行流程](docs/RELEASING.md)。推送符合 package.json 的 `vX.Y.Z` 標籤後，GitHub Actions 會測試、建置 Windows 可攜版並發布到 Releases，包含 SHA256 校驗檔。只有成功建置才會發布；不需個人權杖或上傳本機教材、登入資料。

@@ -118,6 +118,9 @@ function registerIPC() {
     for(const [key,max] of [['aiConcurrency',6],['pdfWorkers',4]] as const){
       const n=value[key];if(n!==undefined){if(!Number.isInteger(n)||n<1||n>max)throw new Error('並行數超出範圍');clean[key]=n;}
     }
+    for(const [key,min,max] of [['uiScale',80,150],['readingFontSize',12,26]] as const){
+      const n=value[key];if(n!==undefined){if(!Number.isInteger(n)||n<min||n>max)throw new Error('字級超出範圍');clean[key]=n;}
+    }
     store.updateSettings(clean);for(const loader of workers.values())loader.setParallelism(store.settings.pdfWorkers);changed();engine.wake();
   });
   handle('study:generation',async(id:string,paused:boolean)=>{
