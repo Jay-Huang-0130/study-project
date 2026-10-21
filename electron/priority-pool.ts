@@ -9,15 +9,20 @@ export class PriorityPool {
     if(!Number.isInteger(capacity)||capacity<1||capacity>6)throw new Error('並行上限必須為 1～6。');
     if(this.capacity===capacity)return;this.capacity=capacity;this.changed();this.drain();
   }
-  run<T>(priority: number, task: () => Promise<T>): Promise<T> {
+  run<T>(priority: number, task: () => Promise<T>,signal?:AbortSignal): Promise<T> {
     return new Promise<T>((resolve,reject) => {
-      this.queue.push({priority,order:this.sequence++,execute:() => {
+      if(signal?.aborted){reject(new DOMException('生成已暫停','AbortError'));return;}
+      const abort=()=>{const i=this.queue.indexOf(entry);if(i>=0)this.queue.splice(i,1);reject(new DOMException('生成已暫停','AbortError'));this.changed();};
+      const entry={priority,order:this.sequence++,execute:() => {
+        signal?.removeEventListener('abort',abort);
         this.active++;
         this.changed();
         let result: Promise<T>;
         try { result = task(); } catch (error) { result = Promise.reject(error); }
         void result.then(resolve,reject).finally(() => {this.active--;this.changed();this.drain();});
-      }});
+      }};
+      signal?.addEventListener('abort',abort,{once:true});
+      this.queue.push(entry);
       this.changed();
       this.drain();
     });

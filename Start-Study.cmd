@@ -1,8 +1,8 @@
 @echo off
 setlocal
-set "STUDY_APP=%~dp0release\app-0.4.0\Study Project.exe"
+set "STUDY_APP=%~dp0release\app-0.5.0\Study Project.exe"
 if not exist "%STUDY_APP%" set "STUDY_APP=%~dp0release\win-unpacked\Study Project.exe"
-if not exist "%STUDY_APP%" set "STUDY_APP=%~dp0release\Study-Project-0.4.0-Windows.exe"
+if not exist "%STUDY_APP%" set "STUDY_APP=%~dp0release\Study-Project-0.5.0-Windows.exe"
 if not exist "%STUDY_APP%" (
   echo Please build Study Project first: npm ci ^&^& npm run package
   pause

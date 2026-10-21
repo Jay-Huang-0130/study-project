@@ -29,12 +29,14 @@ export class Store {
       // Fail visibly on corruption instead of silently replacing learning records.
       const book: Book = JSON.parse(readFileSync(file, 'utf8'));
       if (book.id !== id || !Array.isArray(book.pages)) throw new Error(`教材資料格式錯誤：${id}`);
+      book.generationPaused ??= this.settings.paused;
+      book.generationStarted ??= true;
       if (book.mapStatus === 'running') book.mapStatus = 'pending';
       if (book.extraction === 'running') book.extraction = 'pending';
       for (const page of book.pages) {
         if (page.status === 'running') page.status = 'pending';
-        for (const m of page.messages) if (m.status === 'running' || m.status === 'pending') {
-          m.status = 'error'; m.error = '上次問答中斷，請重新送出問題。';
+        for (const m of page.messages) if (m.status === 'running') {
+          m.status = 'pending'; m.error = undefined;
         }
       }
       this.books.set(id, book);
@@ -61,7 +63,7 @@ export class Store {
     if(typeof messageId!=='string'||!messageId)throw new Error('問答紀錄無效');
     const page=book.pages[n-1],message=page.messages.find(m=>m.id===messageId);
     if(!message)throw new Error('找不到這筆問答紀錄');
-    if(message.status==='running'||message.status==='pending')throw new Error('請等待回答完成後再刪除');
+    if(message.status==='running')throw new Error('請等待回答完成後再刪除');
     const messages=page.messages.filter(m=>m.id!==messageId);
     // Persist first so a failed disk write leaves the visible history intact.
     atomicJSON(path.join(this.dir(id),'book.json'),{...book,pages:book.pages.map(p=>p===page?{...p,messages}:p)});
@@ -73,12 +75,12 @@ export class Store {
     if (!bytes.subarray(0, 1024).toString('latin1').includes('%PDF-')) throw new Error('這不是有效的 PDF 檔案');
     const id = createHash('sha256').update(bytes).digest('hex');
     if (this.books.has(id)) return this.book(id);
-    const book: Book = { id, name: path.basename(file), count: 0, currentPage: 1, createdAt: new Date().toISOString(), extraction: 'pending', extracted: 0, mapStatus: 'pending', mapChunks: [], pages: [] };
+    const book: Book = { id, name: path.basename(file), count: 0, currentPage: 1, createdAt: new Date().toISOString(), extraction: 'pending', extracted: 0, mapStatus: 'pending', mapChunks: [], pages: [], generationPaused:false,generationStarted:false };
     mkdirSync(path.join(this.root, 'books', id), { recursive: true });
     copyFileSync(file, path.join(this.root, 'books', id, 'source.pdf'));
     this.books.set(id, book); this.save(book); return book;
   }
   summaries(): BookSummary[] {
-    return [...this.books.values()].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(b => ({ id: b.id, name: b.name, count: b.count, currentPage: b.currentPage, createdAt: b.createdAt, completed: b.pages.filter(p => p.status === 'done').length }));
+    return [...this.books.values()].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(b => ({ id: b.id, name: b.name, count: b.count, currentPage: b.currentPage, createdAt: b.createdAt, completed: b.pages.filter(p => p.status === 'done').length,generationPaused:!!b.generationPaused,pauseReason:b.pauseReason,generationState:b.generationPaused?'paused':'waiting' }));
   }
 }

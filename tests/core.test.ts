@@ -39,7 +39,7 @@ test('restart preserves completed lessons and recovers interrupted jobs without 
     f.book.pages[1].messages.push({id:'m',question:'為什麼',answer:'部分回答',status:'running',kind:'question',createdAt:''});
     f.store.save(f.book); const restored=new Store(f.store.root).book(f.book.id);
     assert.equal(restored.pages[0].lesson,'完成講稿'); assert.equal(restored.pages[0].status,'done');
-    assert.equal(restored.pages[1].status,'pending'); assert.equal(restored.pages[1].messages[0].status,'error');
+    assert.equal(restored.pages[1].status,'pending'); assert.equal(restored.pages[1].messages[0].status,'pending');
   } finally { f.cleanup(); }
 });
 test('page selection prioritizes a jump and the next pages; completed work is skipped', () => {
@@ -64,7 +64,7 @@ test('in-flight lesson stays on original page after navigation; cache revisit ma
     withMap(f.book); let calls=0; let release:(value:string)=>void=()=>{};
     const provider:Provider={generate:async()=>{calls++; return new Promise<string>(r=>release=r);}};
     engine=new Engine(f.store,provider,()=>{},()=>{}); engine.activeId=f.book.id; engine.authenticated=true; engine.wake();
-    await until(()=>calls===1); f.book.currentPage=2; f.store.settings.paused=true; release('第一頁的講稿');
+    await until(()=>calls===1); f.book.currentPage=2; f.book.generationPaused=true; release('第一頁的講稿');
     await until(()=>f.book.pages[0].status==='done');
     assert.equal(f.book.pages[0].lesson,'第一頁的講稿'); assert.equal(f.book.pages[1].lesson,'');
     f.book.currentPage=1; engine.wake(); assert.equal(calls,1);
@@ -85,14 +85,14 @@ test('available pages get lessons and accept questions before remaining images o
     f.book.extraction='running';for(const p of f.book.pages.slice(2))p.imageReady=false;
     const provider:Provider={generate:async(prompt,images,_model,_instructions,_delta,schema:any)=>{
       if(schema?.properties?.pages)return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
-      if(prompt.includes('撰寫一對一')){f.store.settings.paused=true;return '第一頁已經可以閱讀';}
+      if(prompt.includes('撰寫一對一')){f.book.generationPaused=true;return '第一頁已經可以閱讀';}
       return '可以先回答這一頁';
     }};
     engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
     await until(()=>f.book.pages[0].status==='done');
     assert.equal(f.book.extraction,'running');assert.equal(f.book.map?.complete,false);assert.equal(f.book.map?.pages.length,2);
     assert.equal(f.book.pages[0].contextComplete,false);assert.equal(f.book.pages[0].contextPages,2);
-    await engine.ask(f.book.id,1,'這一頁可以先問嗎？');assert.equal(f.book.pages[0].messages[0].status,'done');
+    f.book.generationPaused=false;await engine.ask(f.book.id,1,'這一頁可以先問嗎？');assert.equal(f.book.pages[0].messages[0].status,'done');
   }finally{engine?.stop();f.cleanup();}
 });
 
@@ -123,7 +123,7 @@ test('a fully cached book issues no model request even with generation enabled',
     withMap(f.book);for(const p of f.book.pages){p.status='done';p.lesson='已保存';}
     let calls=0;engine=new Engine(f.store,{generate:async()=>{calls++;return 'unexpected';}},()=>{},()=>{});
     engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
-    assert.equal(calls,0);assert.equal(engine.activity,'講解已準備完成');
+    assert.equal(calls,0);assert.equal(engine.activity,'本教材講解已準備完成');
   } finally {engine?.stop();f.cleanup();}
 });
 test('repeated provider failures pause background work instead of failing every remaining page', async () => {
@@ -132,9 +132,9 @@ test('repeated provider failures pause background work instead of failing every 
     withMap(f.book);let calls=0;
     engine=new Engine(f.store,{generate:async()=>{calls++;throw new Error('Provider rejected request');}},()=>{},()=>{});
     engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
-    await until(()=>f.store.settings.paused);
-    assert.equal(calls,3);assert.equal(f.book.pages.filter(p=>p.status==='error').length,3);
-    assert.equal(f.book.pages.filter(p=>p.status==='pending').length,17);
+    await until(()=>f.book.generationPaused===true);
+    assert.equal(calls,1);assert.equal(f.book.pages.filter(p=>p.status==='pending').length,20);
+    assert.equal(f.book.generationPaused,true);
   } finally {engine?.stop();f.cleanup();}
 });
 test('shutdown returns interrupted lessons to pending for automatic continuation', async () => {
@@ -154,7 +154,7 @@ test('indexing starts with the page the reader jumped to rather than assuming a 
   try{
     f.book.currentPage=70;
     const provider:Provider={generate:async(_prompt,images)=>{
-      f.store.settings.paused=true;
+      f.book.generationPaused=true;
       return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
     }};
     engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
@@ -170,7 +170,7 @@ test('a final map arriving during a lesson preserves that answer and its partial
     let finishLesson:(text:string)=>void=()=>{};
     const provider:Provider={generate:async(prompt,images,_model,_instructions,_delta,schema:any)=>{
       if(schema?.properties?.pages)return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
-      if(schema?.properties?.links){f.store.settings.paused=true;return JSON.stringify({overview:'全書完成',terms:[],links:[1,2,3,4].map(page=>({page,relatedPages:[]}))});}
+      if(schema?.properties?.links){f.book.generationPaused=true;return JSON.stringify({overview:'全書完成',terms:[],links:[1,2,3,4].map(page=>({page,relatedPages:[]}))});}
       return new Promise<string>(resolve=>finishLesson=resolve);
     }};
     engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
@@ -212,7 +212,7 @@ test('four lessons overlap, finish out of order, and remain attached to original
       return new Promise<string>(resolve=>releases.set(n,resolve));
     }},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
     await until(()=>releases.size===4);assert.equal(engine.progress.modelActive,4);assert.equal(engine.progress.activeLessons,4);
-    f.store.updateSettings({paused:true});f.book.currentPage=6;
+    f.book.generationPaused=true;f.book.currentPage=6;
     for(const n of [4,2,3,1]){releases.get(n)!(`page ${n}`);await until(()=>f.book.pages[n-1].status==='done');}
     for(const n of [1,2,3,4]){assert.equal(f.book.pages[n-1].lesson,`page ${n}`);assert.equal(f.book.pages[n-1].lessonDetail,'concise');}
     assert.equal(f.book.pages[5].status,'pending');
@@ -301,5 +301,73 @@ test('a late index result cannot recreate a deleted book',async()=>{
     await until(()=>engine!.progress.modelActive===1);const dir=f.store.dir(f.book.id);engine.activeId=undefined;f.store.deleteBook(f.book.id);
     finish(JSON.stringify({pages:[1,2].map(page=>({page,topic:'topic',summary:'summary',terms:[],relatedPages:[]}))}));
     await until(()=>!engine!.progress.indexing);assert.equal(existsSync(dir),false);assert.equal(f.store.summaries().length,0);
+  }finally{engine?.stop();f.cleanup();}
+});
+
+
+test('pause aborts all page requests immediately; resume retries only unfinished pages and ignores late answers',async()=>{
+  const f=setup(4);let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.store.updateSettings({aiConcurrency:2});f.book.pages[3].status='done';f.book.pages[3].lesson='cached';
+    const releases:Array<(s:string)=>void>=[],signals:AbortSignal[]=[];let calls=0;
+    engine=new Engine(f.store,{generate:async(_p,_i,_m,_r,_d,_s,signal)=>{calls++;signals.push(signal!);return new Promise<string>(r=>releases.push(r));}},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    await until(()=>calls===2);engine.pauseBook(f.book.id);assert.ok(signals.every(s=>s.aborted));assert.equal(f.book.pages.filter(p=>p.status==='running').length,0);
+    await until(()=>engine!.progress.modelActive===0);for(const release of releases)release('old result');
+    await new Promise(r=>setTimeout(r,40));assert.equal(calls,2);assert.equal(f.book.pages[0].lesson,'');assert.equal(f.book.pages[3].lesson,'cached');
+    engine.resumeBook(f.book.id);await until(()=>calls===4);releases[2]('new 1');releases[3]('new 2');await until(()=>calls===5);releases[4]('new 3');await until(()=>engine!.bookState(f.book)==='complete');
+    assert.equal(f.book.pages[0].lesson,'new 1');assert.equal(f.book.pages[3].lesson,'cached');
+  }finally{engine?.stop();f.cleanup();}
+});
+function anotherBook(f:ReturnType<typeof setup>){
+  const file=path.join(f.dir,'second.pdf');writeFileSync(file,'%PDF-1.4 second');const book=f.store.import(file);book.count=1;book.extraction='done';book.extracted=1;
+  book.pages=[{number:1,text:'第二份',width:100,height:100,imageReady:true,lesson:'',status:'pending',messages:[]}];withMap(book);return book;
+}
+test('switching books keeps earlier work running; each book has independent pause and total concurrency is bounded',async()=>{
+  const f=setup(2);let engine:Engine|undefined;
+  try{
+    withMap(f.book);const second=anotherBook(f);second.generationPaused=true;f.store.updateSettings({aiConcurrency:2});const releases:Array<()=>void>=[];
+    engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>releases.push(()=>r('完成')))},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();await until(()=>releases.length===2);
+    engine.activeId=second.id;engine.wake();assert.equal(engine.bookState(f.book),'running');assert.equal(engine.bookState(second),'paused');
+    releases[0]();releases[1]();await until(()=>engine!.bookState(f.book)==='complete');assert.equal(second.pages[0].status,'pending');
+    engine.resumeBook(second.id);await until(()=>releases.length===3);assert.ok(engine.progress.modelActive<=2);releases[2]();await until(()=>engine!.bookState(second)==='complete');
+  }finally{engine?.stop();f.cleanup();}
+});
+test('quota failure pauses just that book and one resume retries the failed page',async()=>{
+  const f=setup(1);let engine:Engine|undefined;
+  try{
+    withMap(f.book);const second=anotherBook(f);second.generationStarted=true;f.store.updateSettings({aiConcurrency:2});let failures=0;
+    engine=new Engine(f.store,{generate:async prompt=>{if(prompt.includes(`教材：${f.book.name}`)&&failures++===0)throw new Error('usage limit reached');return '完成';}},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();
+    await until(()=>f.book.generationPaused===true&&second.pages[0].status==='done');assert.match(f.book.pauseReason!,/usage limit/);assert.equal(second.generationPaused,false);
+    engine.resumeBook(f.book.id);await until(()=>f.book.pages[0].status==='done');assert.equal(f.book.generationPaused,false);
+  }finally{engine?.stop();f.cleanup();}
+});
+test('offline interruption persists per-book pause and unfinished work across restart',async()=>{
+  const f=setup(1);let engine:Engine|undefined;
+  try{
+    withMap(f.book);engine=new Engine(f.store,{generate:async()=>new Promise<string>(()=>{})},()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();
+    await until(()=>engine!.progress.modelActive===1);engine.connectionLost('network offline');await until(()=>engine!.progress.modelActive===0);
+    const restored=new Store(f.store.root).book(f.book.id);assert.equal(restored.generationPaused,true);assert.match(restored.pauseReason!,/network offline/);assert.equal(restored.pages[0].status,'pending');
+  }finally{engine?.stop();f.cleanup();}
+});
+test('a failed question resumes in the same record without duplicating history',async()=>{
+  const f=setup(1);let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.book.pages[0].status='done';f.book.pages[0].lesson='saved lesson';let calls=0;
+    engine=new Engine(f.store,{generate:async()=>{if(++calls===1)throw new Error('quota exceeded');return 'recovered answer';}},()=>{},()=>{});engine.authenticated=true;
+    await engine.ask(f.book.id,1,'原問題');assert.equal(f.book.generationPaused,true);const id=f.book.pages[0].messages[0].id;
+    engine.resumeBook(f.book.id);await until(()=>f.book.pages[0].messages[0].status==='done');assert.equal(f.book.pages[0].messages.length,1);assert.equal(f.book.pages[0].messages[0].id,id);assert.equal(f.book.pages[0].messages[0].answer,'recovered answer');
+  }finally{engine?.stop();f.cleanup();}
+});
+test('a cancelled queued request never reaches the provider',async()=>{
+  const pool=new PriorityPool(1);let release:()=>void=()=>{},started=false;const controller=new AbortController();
+  const first=pool.run(1,async()=>new Promise<void>(r=>release=r));
+  const queued=pool.run(1,async()=>{started=true;},controller.signal);controller.abort();await assert.rejects(queued,{name:'AbortError'});release();await first;assert.equal(started,false);
+});
+
+
+test('normal shutdown disconnect does not turn running books into a persisted error pause',()=>{
+  const f=setup();let engine:Engine|undefined;try{
+    engine=new Engine(f.store,{generate:async()=>''},()=>{},()=>{});engine.activeId=f.book.id;engine.stop();engine.connectionLost('normal process close');
+    assert.equal(f.book.generationPaused,false);assert.equal(new Store(f.store.root).book(f.book.id).generationPaused,false);
   }finally{engine?.stop();f.cleanup();}
 });

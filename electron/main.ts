@@ -18,6 +18,12 @@ let client: CodexClient;
 let engine: Engine;
 let auth: AuthState = { connected: false, label: '尚未登入', models: [] };
 const workers = new Map<string, PDFLoader>();
+const stoppingPDF=new Map<string,Promise<void>>();
+function pausePDF(id:string){
+  const loader=workers.get(id);if(!loader)return stoppingPDF.get(id)??Promise.resolve();
+  workers.delete(id);const book=store.book(id);if(book.extraction==='running')book.extraction='pending';store.save(book);
+  const stop=loader.stop().finally(()=>{if(stoppingPDF.get(id)===stop)stoppingPDF.delete(id);changed();});stoppingPDF.set(id,stop);return stop;
+}
 const saveTimers = new Map<string, NodeJS.Timeout>();
 let authReading = false;
 let changeTimer:NodeJS.Timeout|undefined;
@@ -37,18 +43,19 @@ async function readAuth() {
       const model = auth.models.find(m => m.isDefault) ?? auth.models[0];
       if (model) store.updateSettings({ model: model.id });
     }
+    if(!connected&&engine.authenticated)engine.connectionLost('帳號已登出，請重新登入。');
     engine.authenticated = connected; changed(); engine.wake();
   } catch (e) {
     auth = { ...auth, connected: false, label: '連線需要處理', error: e instanceof Error ? e.message : String(e) };
-    engine.authenticated = false; changed();
+    engine.connectionLost(auth.error||'連線失敗'); changed();
   } finally { authReading = false; }
 }
 function extract(id: string) {
   if (workers.has(id)) return;
   const b = store.book(id);
-  if (b.extraction === 'done') return;
+  if (b.extraction === 'done' || b.generationPaused) return;
   b.extraction = 'running'; b.extractionError = undefined; store.save(b); changed();
-  const failed = (error: string) => { b.extraction = 'error'; b.extractionError = error; store.save(b); changed(); workers.delete(id); };
+  const failed = (error: string) => { b.extraction = 'error'; b.extractionError = error; store.save(b); changed(); workers.delete(id);engine.pauseBook(id,error); };
   const loader = new PDFLoader(path.join(app.getAppPath(),'electron/pdf-worker.mjs'),b,store.dir(id),store.settings.pdfWorkers,msg=>{
     if (msg.type === 'count') {
       b.count = msg.count;
@@ -77,7 +84,7 @@ function registerIPC() {
     if (event.sender !== win?.webContents || event.senderFrame !== win?.webContents.mainFrame) throw new Error('不允許此來源');
     return fn(...args);
   });
-  handle('study:state', (id?: string): AppState => ({ books: store.summaries(), active: id ? store.book(id) : undefined, auth, ...store.settings, activity: engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
+  handle('study:state', (id?: string): AppState => ({ books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? store.book(id) : undefined, auth, ...store.settings, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
   handle('study:import', async () => {
     const choice = await dialog.showOpenDialog(win!, { title: '選擇你的教材', filters: [{ name: 'PDF 教材', extensions: ['pdf'] }], properties: ['openFile'] });
     if (choice.canceled) return null;
@@ -99,7 +106,7 @@ function registerIPC() {
   handle('study:logout', async () => { await client.start(); await client.call('account/logout'); await readAuth(); });
   handle('study:settings', (value: Partial<StudySettings>) => {
     const clean: Partial<StudySettings> = {};
-    if (typeof value.paused === 'boolean') clean.paused = value.paused;
+    if(value.paused!==undefined)throw new Error('請使用目前教材的暫停／繼續按鈕');
     if (typeof value.model === 'string') {
       if (!auth.models.some(m => m.id === value.model)) throw new Error('請選擇模型清單中的模型');
       clean.model = value.model;
@@ -109,6 +116,16 @@ function registerIPC() {
       const n=value[key];if(n!==undefined){if(!Number.isInteger(n)||n<1||n>max)throw new Error('並行數超出範圍');clean[key]=n;}
     }
     store.updateSettings(clean);for(const loader of workers.values())loader.setParallelism(store.settings.pdfWorkers);changed();engine.wake();
+  });
+  handle('study:generation',async(id:string,paused:boolean)=>{
+    store.book(id);if(typeof paused!=='boolean')throw new Error('生成狀態無效');
+    if(paused){engine.pauseBook(id);await pausePDF(id);}
+    else{
+      if(!engine.authenticated)await readAuth();
+      if(!engine.authenticated)throw new Error(auth.error||'請先連接 ChatGPT，再繼續生成。');
+      await stoppingPDF.get(id);engine.resumeBook(id);extract(id);
+    }
+    changed();
   });
   handle('study:retry', (id: string, value?: number) => {
     const b = store.book(id);
@@ -130,9 +147,9 @@ function registerIPC() {
   });
   handle('study:deleteBook',async(id:string)=>{
     store.book(id);
-    if(engine.activeId===id)engine.activeId=undefined;
+    engine.pauseBook(id,'正在刪除教材');if(engine.activeId===id)engine.activeId=undefined;
     const timer=saveTimers.get(id);if(timer){clearTimeout(timer);saveTimers.delete(id);}
-    await workers.get(id)?.stop();workers.delete(id);
+    await pausePDF(id);await stoppingPDF.get(id);
     store.deleteBook(id);changed();engine.wake();
   });
   handle('study:exercise', async (id: string, start: number, end: number, count: number) => {
@@ -158,14 +175,14 @@ app.whenReady().then(async () => {
     streams.set(`${event.bookId}:${event.page}:${event.messageId??'lesson'}`,event);
     if(streamTimer)return;
     streamTimer=setTimeout(()=>{streamTimer=undefined;if(win&&!win.isDestroyed())for(const value of streams.values())win.webContents.send('study:delta',value);streams.clear();},100);
-  });
+  },book=>{void pausePDF(book.id);});
   client.on('notification', (method: string, params: any) => {
     if (method === 'account/updated' || method === 'account/login/completed') {
       if (method === 'account/login/completed' && !params.success) { auth.error = '登入未完成，請重新登入。'; changed(); }
       else void readAuth();
     }
   });
-  client.on('connectionError', (message: string) => { auth = { ...auth, connected: false, error: message, label: '模型已中斷' }; engine.authenticated = false; changed(); });
+  client.on('connectionError', (message: string) => { auth = { ...auth, connected: false, error: message, label: '模型已中斷' }; engine.connectionLost(message); changed(); });
   protocol.handle('study', request => {
     const url = new URL(request.url);
     const match = url.pathname.match(/^\/([a-f0-9]{64})\/(source\.pdf|p[1-9]\d*\.jpg)$/);
@@ -182,6 +199,7 @@ app.whenReady().then(async () => {
   if (process.env.VITE_DEV_SERVER_URL) await win.loadURL(process.env.VITE_DEV_SERVER_URL);
   else await win.loadFile(path.join(app.getAppPath(), 'dist/index.html'));
   if (!process.env.STUDY_WINDOWED) win.maximize();
+  for(const book of store.books.values())if(book.generationStarted&&!book.generationPaused&&(book.extraction==='pending'||book.extraction==='error'))extract(book.id);
   void readAuth();
 }).catch(error => { dialog.showErrorBox('Study Project 無法啟動', `${error.message}\n原有資料未被覆寫。`); app.quit(); });
 let shuttingDown = false;
@@ -191,6 +209,7 @@ app.on('before-quit', event => {
   for(const [id,timer] of saveTimers){clearTimeout(timer);store.save(store.book(id));}saveTimers.clear();
   for(const id of workers.keys()){const b=store.book(id);b.extraction='pending';store.save(b);}
   const cleanup: Promise<unknown>[] = [...workers.values()].map(w => w.stop());
+  cleanup.push(...stoppingPDF.values());
   if (client) cleanup.push(client.close());
   void Promise.allSettled(cleanup).then(() => app.quit());
 });

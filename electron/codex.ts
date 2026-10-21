@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import {cancelled} from './cancellation';
 import { EventEmitter } from 'node:events';
 
 const require = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
@@ -75,19 +76,26 @@ export class CodexClient extends EventEmitter {
       this.pending.set(id, { resolve, reject, timer }); this.send({ id, method, params });
     });
   }
-  async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown): Promise<string> {
-    await this.start();
+  async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown, signal?:AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    await this.start();signal?.throwIfAborted();
     const { thread } = await this.call('thread/start', {
       ...(model ? { model } : {}), ephemeral: true, cwd: this.cwd, approvalPolicy: 'never', sandbox: 'read-only',
       baseInstructions: instructions, config: { shell_tool: 'disabled', web_search: 'disabled', 'tools.disable_defaults': true },
     });
+    if(signal?.aborted){void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});throw cancelled();}
     let text = ''; let settled = false; let timer: NodeJS.Timeout;
     return new Promise<string>((resolve, reject) => {
-      const cleanup = () => { clearTimeout(timer); this.off('notification', handle); this.off('connectionError', disconnected); void this.call('thread/unsubscribe', { threadId: thread.id }, 5000).catch(() => {}); };
+      let unsubscribed=false;const unsubscribe=()=>{if(unsubscribed)return;unsubscribed=true;void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});};
+      const cleanup = () => { signal?.removeEventListener('abort',abort);clearTimeout(timer); this.off('notification', handle); this.off('connectionError', disconnected);if(!abortRequested)unsubscribe(); };
       const finish = (error?: Error) => { if (settled) return; settled = true; cleanup(); error ? reject(error) : resolve(text); };
+      let turnId:string|undefined;let abortRequested=false;let interrupted=false;
+      const interrupt=()=>{if(turnId&&!interrupted){interrupted=true;void this.call('turn/interrupt',{threadId:thread.id,turnId},5000).catch(()=>{}).finally(unsubscribe);}};
+      const abort=()=>{abortRequested=true;interrupt();finish(cancelled());};
       const disconnected = (message: string) => finish(new Error(message));
       const handle = (method: string, params: any) => {
-        if (params?.threadId !== thread.id) return;
+        if (params?.threadId !== thread.id || settled) return;
+        if(method==='turn/started'){turnId=params.turn?.id;if(abortRequested)interrupt();}
         if (method === 'item/agentMessage/delta') { text += params.delta; onDelta?.(text); }
         if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase !== 'commentary') text = params.item.text;
         if (method === 'turn/completed') {
@@ -98,11 +106,12 @@ export class CodexClient extends EventEmitter {
       };
       this.on('notification', handle); this.on('connectionError', disconnected);
       timer = setTimeout(() => { void this.call('turn/interrupt', { threadId: thread.id, turnId: turnId ?? '' }).catch(() => {}); finish(new Error('生成超過 8 分鐘，已中斷，請重試。')); }, 8 * 60_000);
-      let turnId: string | undefined;
+      signal?.addEventListener('abort',abort,{once:true});
+      if(signal?.aborted){abort();unsubscribe();return;}
       void this.call('turn/start', {
         threadId: thread.id, input: [{ type: 'text', text: prompt, text_elements: [] }, ...images.map(p => ({ type: 'localImage', path: p }))],
         ...(schema ? { outputSchema: schema } : {}),
-      }).then(r => { turnId = r.turn.id; }).catch(finish);
+      }).then(r => { turnId = r.turn.id;if(abortRequested)interrupt(); }).catch(error=>{finish(error);if(abortRequested)unsubscribe();});
     });
   }
   async close() {
