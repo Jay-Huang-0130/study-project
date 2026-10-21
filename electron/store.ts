@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, copyFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Book, BookSummary, StudySettings } from '../src/shared';
 
@@ -43,7 +43,18 @@ export class Store {
   }
   book(id: string) { const b = this.books.get(id); if (!b) throw new Error('找不到教材'); return b; }
   dir(id: string) { this.book(id); return path.join(this.root, 'books', id); }
-  save(book: Book) { atomicJSON(path.join(this.root, 'books', book.id, 'book.json'), book); }
+  save(book: Book) {
+    // Ignore late work for deleted books, including when identical bytes were reimported.
+    if(this.books.get(book.id)!==book)return;
+    atomicJSON(path.join(this.root, 'books', book.id, 'book.json'), book);
+  }
+  deleteBook(id:string){
+    this.book(id);
+    const target=path.resolve(this.dir(id)),booksRoot=path.resolve(this.root,'books');
+    if(!/^[a-f0-9]{64}$/.test(id)||path.dirname(target)!==booksRoot)throw new Error('教材資料位置無效');
+    rmSync(target,{recursive:true,force:true});
+    this.books.delete(id);
+  }
   deleteMessage(id:string,n:number,messageId:string){
     const book=this.book(id);
     if(!Number.isInteger(n)||n<1||n>book.count)throw new Error('頁碼不在教材範圍內');
@@ -53,7 +64,7 @@ export class Store {
     if(message.status==='running'||message.status==='pending')throw new Error('請等待回答完成後再刪除');
     const messages=page.messages.filter(m=>m.id!==messageId);
     // Persist first so a failed disk write leaves the visible history intact.
-    this.save({...book,pages:book.pages.map(p=>p===page?{...p,messages}:p)});
+    atomicJSON(path.join(this.dir(id),'book.json'),{...book,pages:book.pages.map(p=>p===page?{...p,messages}:p)});
     page.messages=messages;
   }
   updateSettings(value: Partial<typeof this.settings>) { Object.assign(this.settings, value); atomicJSON(path.join(this.root, 'settings.json'), this.settings); }

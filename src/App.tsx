@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import type { AppState, Book, Page, LessonDetail } from './shared';
+import type { AppState, Book, BookSummary, Page, LessonDetail } from './shared';
 import { PDFViewer } from './PDFViewer';
 
 function Markdown({ text, navigate }: { text: string; navigate: (n: number) => void }) {
@@ -19,6 +19,18 @@ export function App() {
   const activeRef = useRef<string | undefined>(undefined);
   const [error,setError] = useState('');
   const [settings,setSettings] = useState(false);
+  const [libraryOpen,setLibraryOpen] = useState(false);
+  const [deleteBook,setDeleteBook] = useState<BookSummary>();
+  const [deletingBook,setDeletingBook] = useState(false);
+  const libraryRef=useRef<HTMLElement>(null);
+  const launcherRef=useRef<HTMLButtonElement>(null);
+  useEffect(()=>{
+    if(!libraryOpen||deleteBook)return;
+    const outside=(e:PointerEvent)=>{if(!libraryRef.current?.contains(e.target as Node)&&!launcherRef.current?.contains(e.target as Node))setLibraryOpen(false);};
+    const escape=(e:KeyboardEvent)=>{if(e.key==='Escape'){setLibraryOpen(false);launcherRef.current?.focus();}};
+    document.addEventListener('pointerdown',outside);document.addEventListener('keydown',escape);
+    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('keydown',escape);};
+  },[libraryOpen,deleteBook]);
   const [question,setQuestion] = useState('');
   const [sending,setSending] = useState(false);
   const [zoom,setZoom] = useState(1);
@@ -44,8 +56,20 @@ export function App() {
     const next = await window.study.state(id); setState(next);
     if (next.active?.count) await window.study.navigate(id,next.active.currentPage);
     else if (next.active?.extraction === 'pending') await window.study.retry(id);
+    setLibraryOpen(false);
   };
   const importPDF = () => run(async () => { const id = await window.study.importPDF(); if (id) await select(id); });
+  const removeBook=async()=>{
+    if(!deleteBook||deletingBook)return;
+    const id=deleteBook.id;setDeletingBook(true);
+    try{
+      await window.study.deleteBook(id);
+      if(activeRef.current===id){activeRef.current=undefined;setActiveId(undefined);setQuestion('');setTab('lesson');}
+      setStreams(current=>Object.fromEntries(Object.entries(current).filter(([key])=>!key.startsWith(`${id}:`))));
+      setDeleteBook(undefined);await refresh();
+    }catch(e){setError(e instanceof Error?e.message:String(e));}
+    finally{setDeletingBook(false);}
+  };
   const book = state.active; const n = book?.currentPage ?? 1; const page = book?.pages[n-1];
   const pageOutline = book?.map?.pages.find(p => p.page === n);
   const navigate = (value: number) => {
@@ -55,7 +79,7 @@ export function App() {
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = 0; },[activeId,n,tab]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || settings) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || settings || deleteBook || libraryOpen) return;
       if (e.key === 'ArrowRight') navigate(n+1); if (e.key === 'ArrowLeft') navigate(n-1);
     }; window.addEventListener('keydown',handler); return () => window.removeEventListener('keydown',handler);
   });
@@ -75,16 +99,19 @@ export function App() {
   };
   const complete = book?.pages.filter(p => p.status === 'done').length ?? 0;
   return <div className="app">
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-icon"><BookOpen size={21}/></div><span>study<span className="brand-dot">.</span><small>你的讀書工作室</small></span></div>
+    <button ref={launcherRef} className="library-launcher" aria-label={libraryOpen?'收起教材欄':'展開教材欄'} aria-expanded={libraryOpen} aria-controls="floating-library" title="教材書庫" onClick={()=>setLibraryOpen(open=>!open)}>{libraryOpen?<X size={23}/>:<BookOpen size={23}/>}<span className="library-count">{state.books.length}</span></button>
+    {libraryOpen && <aside ref={libraryRef} id="floating-library" className="sidebar floating-library" aria-label="教材書庫">
+      <div className="library-heading"><div className="brand"><div className="brand-icon"><BookOpen size={21}/></div><span>study<span className="brand-dot">.</span><small>你的讀書工作室</small></span></div><button className="icon-button" aria-label="關閉教材書庫" onClick={()=>{setLibraryOpen(false);launcherRef.current?.focus();}}><X size={18}/></button></div>
       <button className="import-button" onClick={importPDF}><Plus size={17}/> 匯入 PDF 教材</button>
       <div className="sidebar-label">我的教材 <span>{state.books.length}</span></div>
-      <nav className="library">{state.books.length ? state.books.map(b => <button className={`book-card ${activeId === b.id ? 'selected' : ''}`} key={b.id} onClick={() => void run(() => select(b.id))}>
-        <FileText size={18}/><span><strong>{b.name.replace(/\.pdf$/i,'')}</strong><small>{b.count ? `${b.count} 頁 · 已備妥 ${b.completed} 頁` : '正在解析教材'}</small><i><b style={{width:`${b.count ? b.completed/b.count*100 : 0}%`}}/></i></span>
-      </button>) : <div className="library-empty">把你的第一份教材<br/>放進來吧。</div>}</nav>
-      <div className="sidebar-note"><GraduationCap size={20}/><p>照自己的步調學習。<br/><span>每一次提問，都會留下來。</span></p></div>
-      <button className="connection" onClick={() => setSettings(true)}><i className={state.auth.connected ? 'online' : ''}/><span>{state.auth.label}</span><Settings2 size={15}/></button>
-    </aside>
+      <nav className="library">{state.books.length ? state.books.map(b => <div className={`book-row ${activeId===b.id?'selected':''}`} key={b.id}>
+        <button className={`book-card ${activeId === b.id ? 'selected' : ''}`} onClick={() => void run(() => select(b.id))}>
+          <FileText size={18}/><span><strong>{b.name.replace(/\.pdf$/i,'')}</strong><small>{b.count ? `${b.count} 頁 · 已備妥 ${b.completed} 頁` : '正在解析教材'}</small><i><b style={{width:`${b.count ? b.completed/b.count*100 : 0}%`}}/></i></span>
+        </button><button className="delete-book" aria-label={`刪除教材 ${b.name}`} title={`刪除 ${b.name} 與學習紀錄`} onClick={()=>setDeleteBook(b)}><Trash2 size={14}/><span>刪除</span></button>
+      </div>) : <div className="library-empty">把你的第一份教材<br/>放進來吧。</div>}</nav>
+      <div className="sidebar-note"><GraduationCap size={20}/><p>照自己的步調學習。<br/><span>點選教材後，書庫會自動收起。</span></p></div>
+      <button className="connection" onClick={() => {setSettings(true);setLibraryOpen(false);}}><i className={state.auth.connected ? 'online' : ''}/><span>{state.auth.label}</span><Settings2 size={15}/></button>
+    </aside>}
     <main className="workspace">
       <header className="topbar"><div className="breadcrumb">讀書工作室 <ChevronRight size={13}/><strong>{book ? book.name : '開始學習'}</strong></div><div className="header-actions"><button className="icon-button" title="切換全螢幕" aria-label="切換全螢幕" onClick={() => void run(() => window.study.fullscreen())}><Maximize2 size={17}/></button><button className="icon-button" title="設定" aria-label="設定" onClick={() => setSettings(true)}><Settings2 size={18}/></button></div></header>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="關閉錯誤"><X size={16}/></button></div>}
@@ -113,6 +140,7 @@ export function App() {
         <footer className="statusbar"><span><i className={state.paused ? 'paused' : ''}/>{state.paused ? '背景生成已暫停' : state.activity}</span><div><span>AI {state.runtime.modelActive}/{state.aiConcurrency} · PDF {state.runtime.pdfWorkers} 緒</span><span>紀錄保存在本機</span><button onClick={() => void run(() => window.study.settings({ paused: !state.paused }))}>{state.paused ? <Play size={13}/> : <Pause size={13}/>} {state.paused ? '繼續生成' : '暫停生成'}</button></div></footer>
       </>}
     </main>
+    {deleteBook && <div className="modal-backdrop"><section className="settings-modal delete-book-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-book-title" aria-describedby="delete-book-description"><h2 id="delete-book-title">刪除這份教材？</h2><strong className="delete-book-name">{deleteBook.name}</strong><p id="delete-book-description">會刪除這份教材在書庫中的 PDF 副本、講稿、問答、練習與學習進度，無法復原。原本匯入位置的 PDF 不受影響。</p><div className="dialog-actions"><button className="secondary-button" disabled={deletingBook} autoFocus onClick={()=>setDeleteBook(undefined)}>取消</button><button className="danger-button" disabled={deletingBook} onClick={()=>void removeBook()}>{deletingBook?'正在刪除…':'確認刪除教材'}</button></div></section></div>}
     {exercise && book && <div className="modal-backdrop" onClick={() => setExercise(undefined)}><form className="settings-modal" role="dialog" aria-modal="true" aria-label="練習設定" onClick={e => e.stopPropagation()} onSubmit={e => {
       e.preventDefault(); const id=book.id, range=exercise; setExercise(undefined); setSending(true); setTab('lesson');
       void run(async () => { await window.study.navigate(id,range.start); await window.study.exercise(id,range.start,range.end,range.count); }).finally(() => setSending(false));

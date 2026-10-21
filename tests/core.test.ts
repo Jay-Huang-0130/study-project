@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { lessonGuide } from '../electron/lesson-style';
@@ -266,5 +266,40 @@ test('deleted exercises and failed exchanges are absent from later model context
     let prompt='';engine=new Engine(f.store,{generate:async(input)=>{prompt=input;return '新回答';}},()=>{},()=>{});engine.authenticated=true;
     await engine.ask(f.book.id,1,'新問題');assert.ok(!prompt.includes('deleted exercise marker'));
     assert.equal(f.book.pages[0].messages.length,1);assert.equal(f.book.pages[0].messages[0].question,'新問題');
+  }finally{engine?.stop();f.cleanup();}
+});
+
+
+test('deleting a book removes its library files and history but keeps the source and other books',()=>{
+  const f=setup();try{
+    const old=f.book;old.pages[0].messages=[{id:'m',question:'q',answer:'a',kind:'question',status:'done',createdAt:''}];f.store.save(old);
+    const otherFile=path.join(f.dir,'other.pdf');writeFileSync(otherFile,'%PDF-1.4 other');const other=f.store.import(otherFile);
+    const removedDir=f.store.dir(old.id);f.store.deleteBook(old.id);
+    assert.equal(existsSync(removedDir),false);assert.equal(existsSync(f.file),true);assert.equal(existsSync(f.store.dir(other.id)),true);
+    assert.deepEqual(new Store(f.store.root).summaries().map(b=>b.id),[other.id]);
+    f.store.save(old);assert.equal(existsSync(removedDir),false);
+    const fresh=f.store.import(f.file);assert.equal(fresh.pages.length,0);f.store.save(old);
+    assert.equal(new Store(f.store.root).book(fresh.id).pages.length,0);
+  }finally{f.cleanup();}
+});
+test('a late lesson after book deletion cannot recreate files or overwrite a reimport',async()=>{
+  const f=setup();let engine:Engine|undefined;
+  try{
+    withMap(f.book);let finish:(text:string)=>void=()=>{};
+    engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>finish=r)},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    await until(()=>engine!.progress.modelActive===1);const id=f.book.id,dir=f.store.dir(id);
+    engine.activeId=undefined;f.store.deleteBook(id);const fresh=f.store.import(f.file);finish('deleted lesson must not return');
+    await until(()=>engine!.progress.activeLessons===0);
+    assert.equal(f.store.book(id),fresh);assert.equal(new Store(f.store.root).book(id).pages.length,0);
+    assert.equal(f.store.settings.paused,false);assert.equal(existsSync(dir),true);
+  }finally{engine?.stop();f.cleanup();}
+});
+test('a late index result cannot recreate a deleted book',async()=>{
+  const f=setup();let engine:Engine|undefined;
+  try{
+    let finish:(text:string)=>void=()=>{};engine=new Engine(f.store,{generate:async()=>new Promise<string>(r=>finish=r)},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    await until(()=>engine!.progress.modelActive===1);const dir=f.store.dir(f.book.id);engine.activeId=undefined;f.store.deleteBook(f.book.id);
+    finish(JSON.stringify({pages:[1,2].map(page=>({page,topic:'topic',summary:'summary',terms:[],relatedPages:[]}))}));
+    await until(()=>!engine!.progress.indexing);assert.equal(existsSync(dir),false);assert.equal(f.store.summaries().length,0);
   }finally{engine?.stop();f.cleanup();}
 });

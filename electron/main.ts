@@ -128,6 +128,13 @@ function registerIPC() {
   handle('study:deleteMessage',(id:string,value:number,messageId:string)=>{
     store.deleteMessage(id,pageNumber(id,value),messageId);changed();
   });
+  handle('study:deleteBook',async(id:string)=>{
+    store.book(id);
+    if(engine.activeId===id)engine.activeId=undefined;
+    const timer=saveTimers.get(id);if(timer){clearTimeout(timer);saveTimers.delete(id);}
+    await workers.get(id)?.stop();workers.delete(id);
+    store.deleteBook(id);changed();engine.wake();
+  });
   handle('study:exercise', async (id: string, start: number, end: number, count: number) => {
     const first = pageNumber(id,start), last = pageNumber(id,end);
     if (last < first || last-first >= 10 || !Number.isInteger(count) || count < 1 || count > 5) throw new Error('每次可選 1～10 頁，並產生 1～5 題。');

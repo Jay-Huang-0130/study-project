@@ -55,11 +55,11 @@ export class Engine {
     this.run();void this.runIndex();
   }
   stop(){this.stopping=true;}
-  private persist(book:Book){this.store.save(book);this.changed();}
+  private persist(book:Book){if(this.store.books.get(book.id)!==book)return;this.store.save(book);this.changed();}
   private canWork(){return !this.stopping && !!this.activeId && this.authenticated && !this.store.settings.paused;}
-  private async generate(priority:number,...args:Parameters<Provider['generate']>):Promise<string>{
+  private async generate(book:Book,priority:number,...args:Parameters<Provider['generate']>):Promise<string>{
     for(let attempt=0;;attempt++){
-      try{return await this.pool.run(priority,()=>{if(this.stopping)throw new Error('程式正在關閉');return this.provider.generate(...args);});}
+      try{return await this.pool.run(priority,()=>{if(this.stopping)throw new Error('程式正在關閉');if(this.store.books.get(book.id)!==book)throw new Error('教材已刪除');return this.provider.generate(...args);});}
       catch(error){
         const message=error instanceof Error?error.message:String(error);
         if(this.stopping||attempt>=2||!/ECONNRESET|ETIMEDOUT|ENOTFOUND|502|503|temporar|network|connection reset/i.test(message))throw error;
@@ -69,6 +69,7 @@ export class Engine {
     }
   }
   private failure(book:Book,error:unknown,n?:number){
+    if(this.store.books.get(book.id)!==book)return;
     const message=error instanceof Error?error.message:String(error);
     if(this.stopping){if(n)book.pages[n-1].status='pending';else book.mapStatus='pending';this.persist(book);return;}
     this.consecutiveFailures++;
@@ -119,7 +120,8 @@ export class Engine {
     const group=numbers.map(n=>book.pages[n-1]);
     book.mapStatus='running';book.mapError=undefined;this.activity=`背景分析教材 · ${book.mapChunks.flat().length}/${book.count} 頁`;this.persist(book);
     const prompt=`建立這份 ${book.count} 頁教材中以下頁面的索引。圖片順序與頁碼順序一致，頁面可能不是連續的。逐頁描述觀念、符號定義、圖表及推導。summary 精簡至最多 3 個重點、約 120 字；density 使用 brief（封面、過場或單一定義）、normal（一般頁）、dense（多式推導或複雜圖表）。只輸出 JSON，不遺漏、不重複頁碼。terms 記錄術語及定義，relatedPages 只填有原始依據的頁碼。\n${group.map(p=>`第 ${p.number} 頁\n${p.text}`).join('\n\n')}`;
-    const raw=await this.generate(2,prompt,group.map(p=>this.image(book,p.number)),this.store.settings.model,instructions,undefined,pageSchema);
+    const raw=await this.generate(book,2,prompt,group.map(p=>this.image(book,p.number)),this.store.settings.model,instructions,undefined,pageSchema);
+    if(this.store.books.get(book.id)!==book)return;
     book.mapChunks.push(validateMapChunk(parseJSON(raw),numbers,book.count));
     this.partialMap(book);this.persist(book);
     // Do not wait for the next index batch to finish before showing this batch's lessons.
@@ -128,7 +130,8 @@ export class Engine {
   private async finalizeMap(book:Book){
     this.activity='背景整合全書脈絡，已完成講解可繼續閱讀';this.changed();
     const pages=book.mapChunks.flat().sort((a,b)=>a.page-b.page);
-    const raw=parseJSON(await this.generate(2,`根據完整逐頁索引，整理全書教學順序、章節範圍、先備概念及術語。overview 和 terms 保留來源頁碼。links 涵蓋每頁，relatedPages 選最多 3 頁重要前置定義或相連推導，注意跨分段關係；沒有依據就空陣列。\n${JSON.stringify(pages)}`,[],this.store.settings.model,instructions,undefined,overviewSchema));
+    const raw=parseJSON(await this.generate(book,2,`根據完整逐頁索引，整理全書教學順序、章節範圍、先備概念及術語。overview 和 terms 保留來源頁碼。links 涵蓋每頁，relatedPages 選最多 3 頁重要前置定義或相連推導，注意跨分段關係；沒有依據就空陣列。\n${JSON.stringify(pages)}`,[],this.store.settings.model,instructions,undefined,overviewSchema));
+    if(this.store.books.get(book.id)!==book)return;
     if(typeof raw.overview!=='string'||!Array.isArray(raw.terms)||!raw.terms.every((t:unknown)=>typeof t==='string'))throw new Error('教材總覽格式無效，請重試。');
     const linked=validateMapChunk({pages:Array.isArray(raw.links)?raw.links.map((p:any)=>({...pages.find(x=>x.page===p.page),...p})):[]},pages.map(p=>p.page),book.count);
     const map:BookMap={version:createHash('sha256').update(JSON.stringify(raw)).digest('hex').slice(0,16),complete:true,overview:raw.overview,terms:raw.terms,pages:linked};
@@ -153,9 +156,9 @@ export class Engine {
   private async lesson(book:Book,n:number){
     const page=book.pages[n-1],ctx=this.context(book,n),model=this.store.settings.model,detail=this.store.settings.lessonDetail,generationId=randomUUID();
     page.generationId=generationId;page.status='running';page.error=undefined;this.activity=`準備第 ${n} 頁講解，其餘分析在背景繼續`;this.persist(book);
-    const answer=await this.generate(1,`${ctx.text}\n${lessonGuide(book,n,detail)}`,ctx.images,model,instructions,text=>this.delta({bookId:book.id,page:n,generationId,text}));
+    const answer=await this.generate(book,1,`${ctx.text}\n${lessonGuide(book,n,detail)}`,ctx.images,model,instructions,text=>this.delta({bookId:book.id,page:n,generationId,text}));
     // Additive map updates must not discard a valid in-flight page answer.
-    if(!acceptsResult(book,n,ctx.version,generationId))return;
+    if(this.store.books.get(book.id)!==book||!acceptsResult(book,n,ctx.version,generationId))return;
     page.lesson=answer;page.status='done';page.mapVersion=ctx.version;page.model=model;page.lessonDetail=detail;page.contextPages=ctx.coverage;page.contextComplete=ctx.complete;this.persist(book);
   }
   async ask(bookId:string,n:number,question:string,kind:Message['kind']='question',scope?:{start:number;end:number;count:number}){
@@ -172,7 +175,7 @@ export class Engine {
     try{
       const ctx=this.context(book,n,sourcePages);
       const prompt=kind==='exercise'?`依指定範圍原始教材出 ${scope?.count??2} 題理解練習。先不給答案，等作答後依原頁批改、解釋並標示複習頁碼。要求：${question}`:`回答問題，若在作答練習，依原頁核對並提供原因與複習頁碼：${question}`;
-      m.answer=await this.generate(0,`${ctx.text}\n已完成講稿：${page.lesson}\n本頁過去問答：${history}\n${prompt}`,ctx.images,this.store.settings.model,instructions,text=>this.delta({bookId,page:n,messageId:m.id,text}));m.status='done';
+      m.answer=await this.generate(book,0,`${ctx.text}\n已完成講稿：${page.lesson}\n本頁過去問答：${history}\n${prompt}`,ctx.images,this.store.settings.model,instructions,text=>this.delta({bookId,page:n,messageId:m.id,text}));m.status='done';
     }catch(error){m.status='error';m.error=error instanceof Error?error.message:String(error);}
     finally{this.questions--;this.persist(book);this.wake();}
   }
