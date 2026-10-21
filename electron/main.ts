@@ -1,12 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, net, shell } from 'electron';
-import { Worker } from 'node:worker_threads';
+import { PDFLoader } from './pdf-loader';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { Store } from './store';
 import { CodexClient } from './codex';
 import { Engine } from './engine';
-import type { AppState, AuthState, Page } from '../src/shared';
+import type { AppState, AuthState, Page, StudySettings } from '../src/shared';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'study', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 if (process.env.STUDY_USER_DATA) app.setPath('userData', process.env.STUDY_USER_DATA);
@@ -17,7 +17,7 @@ let store: Store;
 let client: CodexClient;
 let engine: Engine;
 let auth: AuthState = { connected: false, label: '尚未登入', models: [] };
-const workers = new Map<string, Worker>();
+const workers = new Map<string, PDFLoader>();
 const saveTimers = new Map<string, NodeJS.Timeout>();
 let authReading = false;
 let changeTimer:NodeJS.Timeout|undefined;
@@ -48,10 +48,8 @@ function extract(id: string) {
   const b = store.book(id);
   if (b.extraction === 'done') return;
   b.extraction = 'running'; b.extractionError = undefined; store.save(b); changed();
-  const worker = new Worker(path.join(app.getAppPath(), 'electron/pdf-worker.mjs'), { workerData: { file: path.join(store.dir(id), 'source.pdf'), dir: store.dir(id), currentPage:b.currentPage, ready:b.pages.filter(p=>p.imageReady).map(p=>p.number) } });
-  workers.set(id, worker);
   const failed = (error: string) => { b.extraction = 'error'; b.extractionError = error; store.save(b); changed(); workers.delete(id); };
-  worker.on('message', msg => {
+  const loader = new PDFLoader(path.join(app.getAppPath(),'electron/pdf-worker.mjs'),b,store.dir(id),store.settings.pdfWorkers,msg=>{
     if (msg.type === 'count') {
       b.count = msg.count;
       if (!b.pages.length) b.pages = Array.from({ length: b.count }, (_,i): Page => ({ number: i+1, text: '', width: 0, height: 0, imageReady: false, lesson: '', status: 'pending', messages: [] }));
@@ -61,14 +59,12 @@ function extract(id: string) {
       saveSoon(id);changed();return;
     }
     if(msg.type==='textDone')b.textReady=true;
-    if (msg.type === 'page') { b.pages[msg.number-1].imageReady=true; b.extracted=b.pages.filter(p=>p.imageReady).length; }
-    if (msg.type === 'done') { b.extraction = 'done'; workers.delete(id); engine.wake(); }
-    if (msg.type === 'error') { failed(msg.error); return; }
-    store.save(b); changed();
-    engine.wake();
-  });
-  worker.on('error', error => failed(error.message));
-  worker.on('exit', code => { if(workers.has(id)){if(shuttingDown){b.extraction='pending';store.save(b);workers.delete(id);}else failed(`PDF 處理中斷（${code}），請重試。`);} });
+    if(msg.type==='page'){b.pages[msg.number-1].imageReady=true;b.extracted=b.pages.filter(p=>p.imageReady).length;}
+    if(msg.type==='done'){b.extraction='done';workers.delete(id);}
+    if(msg.type==='error'){failed(msg.error);return;}
+    store.save(b);changed();engine.wake();
+  },changed);
+  workers.set(id,loader);loader.start();
 }
 function pageNumber(id: string, value: unknown) {
   const b = store.book(id); const n = Number(value);
@@ -81,7 +77,7 @@ function registerIPC() {
     if (event.sender !== win?.webContents || event.senderFrame !== win?.webContents.mainFrame) throw new Error('不允許此來源');
     return fn(...args);
   });
-  handle('study:state', (id?: string): AppState => ({ books: store.summaries(), active: id ? store.book(id) : undefined, auth, ...store.settings, activity: engine.activity }));
+  handle('study:state', (id?: string): AppState => ({ books: store.summaries(), active: id ? store.book(id) : undefined, auth, ...store.settings, activity: engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
   handle('study:import', async () => {
     const choice = await dialog.showOpenDialog(win!, { title: '選擇你的教材', filters: [{ name: 'PDF 教材', extensions: ['pdf'] }], properties: ['openFile'] });
     if (choice.canceled) return null;
@@ -89,7 +85,6 @@ function registerIPC() {
   });
   handle('study:navigate', (id: string, value: number) => {
     const b = store.book(id); b.currentPage = pageNumber(id,value); store.save(b); engine.activeId = id;
-    workers.get(id)?.postMessage({type:'prioritize',page:b.currentPage});
     if (b.extraction === 'pending') extract(id);
     changed(); engine.wake();
   });
@@ -102,14 +97,18 @@ function registerIPC() {
   });
   handle('study:refreshAuth', readAuth);
   handle('study:logout', async () => { await client.start(); await client.call('account/logout'); await readAuth(); });
-  handle('study:settings', (value: { model?: string; paused?: boolean }) => {
-    const clean: { model?: string; paused?: boolean } = {};
+  handle('study:settings', (value: Partial<StudySettings>) => {
+    const clean: Partial<StudySettings> = {};
     if (typeof value.paused === 'boolean') clean.paused = value.paused;
     if (typeof value.model === 'string') {
       if (!auth.models.some(m => m.id === value.model)) throw new Error('請選擇模型清單中的模型');
       clean.model = value.model;
     }
-    store.updateSettings(clean); changed(); engine.wake();
+    if(value.lessonDetail!==undefined){if(!['concise','standard','detailed'].includes(value.lessonDetail))throw new Error('講解長度無效');clean.lessonDetail=value.lessonDetail;}
+    for(const [key,max] of [['aiConcurrency',6],['pdfWorkers',4]] as const){
+      const n=value[key];if(n!==undefined){if(!Number.isInteger(n)||n<1||n>max)throw new Error('並行數超出範圍');clean[key]=n;}
+    }
+    store.updateSettings(clean);for(const loader of workers.values())loader.setParallelism(store.settings.pdfWorkers);changed();engine.wake();
   });
   handle('study:retry', (id: string, value?: number) => {
     const b = store.book(id);
@@ -142,7 +141,7 @@ app.whenReady().then(async () => {
   const data = process.env.STUDY_DATA_DIR ?? dataArgument ?? (portableRoot ? path.join(portableRoot, 'StudyProjectData') : path.join(app.getPath('userData'), 'library'));
   mkdirSync(data,{recursive:true});
   store = new Store(data);
-  client = new CodexClient(path.join(app.getPath('userData'), 'oauth'), path.join(app.getPath('userData'), 'tutor-runtime'));
+  client = new CodexClient(path.join(app.getPath('userData'), 'oauth'), path.join(app.getPath('userData'), 'tutor-runtime'),app.getVersion());
   const streams=new Map<string,Parameters<ConstructorParameters<typeof Engine>[3]>[0]>();
   let streamTimer:NodeJS.Timeout|undefined;
   engine = new Engine(store, client, changed, event => {
@@ -180,7 +179,8 @@ app.on('before-quit', event => {
   if (shuttingDown) return;
   event.preventDefault(); shuttingDown = true; engine?.stop();
   for(const [id,timer] of saveTimers){clearTimeout(timer);store.save(store.book(id));}saveTimers.clear();
-  const cleanup: Promise<unknown>[] = [...workers.values()].map(w => w.terminate());
+  for(const id of workers.keys()){const b=store.book(id);b.extraction='pending';store.save(b);}
+  const cleanup: Promise<unknown>[] = [...workers.values()].map(w => w.stop());
   if (client) cleanup.push(client.close());
   void Promise.allSettled(cleanup).then(() => app.quit());
 });

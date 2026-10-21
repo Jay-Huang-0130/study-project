@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
-import type { Book, BookSummary } from '../src/shared';
+import type { Book, BookSummary, StudySettings } from '../src/shared';
+
+export function normalizeSettings(raw:Partial<StudySettings>):StudySettings{
+  return {paused:typeof raw.paused==='boolean'?raw.paused:false,model:typeof raw.model==='string'?raw.model:'',
+    aiConcurrency:Number.isInteger(raw.aiConcurrency)&&raw.aiConcurrency!>=1&&raw.aiConcurrency!<=6?raw.aiConcurrency!:4,
+    pdfWorkers:Number.isInteger(raw.pdfWorkers)&&raw.pdfWorkers!>=1&&raw.pdfWorkers!<=4?raw.pdfWorkers!:2,
+    lessonDetail:raw.lessonDetail&&['concise','standard','detailed'].includes(raw.lessonDetail)?raw.lessonDetail:'concise'};
+}
 
 export function atomicJSON(file: string, value: unknown) {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -11,11 +18,11 @@ export function atomicJSON(file: string, value: unknown) {
 }
 export class Store {
   books = new Map<string, Book>();
-  settings: { paused: boolean; model: string } = { paused: false, model: '' };
+  settings:StudySettings=normalizeSettings({});
   constructor(public root: string) {
     mkdirSync(path.join(root, 'books'), { recursive: true });
     const settingsFile = path.join(root, 'settings.json');
-    if (existsSync(settingsFile)) this.settings = { ...this.settings, ...JSON.parse(readFileSync(settingsFile, 'utf8')) };
+    if (existsSync(settingsFile)) this.settings = normalizeSettings(JSON.parse(readFileSync(settingsFile, 'utf8')));
     for (const id of readdirSync(path.join(root, 'books'))) {
       const file = path.join(root, 'books', id, 'book.json');
       if (!existsSync(file)) continue;

@@ -32,7 +32,7 @@ export class CodexClient extends EventEmitter {
   private sequence = 0;
   private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private starting?: Promise<void>;
-  constructor(public home: string, public cwd: string) { super(); }
+  constructor(public home: string, public cwd: string,private version = 'development') { super(); }
   async start() {
     if (this.starting) return this.starting;
     this.starting = this.boot().catch(e => { this.starting = undefined; throw e; });
@@ -60,7 +60,7 @@ export class CodexClient extends EventEmitter {
         if (msg.error) waiting.reject(new Error(msg.error.message)); else waiting.resolve(msg.result);
       } else if (msg.method) this.emit('notification', msg.method, msg.params);
     });
-    await this.call('initialize', { clientInfo: { name: 'study_project', title: 'Study Project', version: '0.2.0' }, capabilities: { experimentalApi: true } });
+    await this.call('initialize', { clientInfo: { name: 'study_project', title: 'Study Project', version: this.version }, capabilities: { experimentalApi: true } });
     this.send({ method: 'initialized' });
   }
   private failed(error: Error) {

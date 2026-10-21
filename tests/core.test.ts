@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { lessonGuide } from '../electron/lesson-style';
+import { normalizeSettings } from '../electron/store';
 import { Store } from '../electron/store';
 import { Engine, nextPage, validateMapChunk, acceptsResult, type Provider } from '../electron/engine';
 import type { Book } from '../src/shared';
@@ -12,6 +14,7 @@ function setup(count = 3) {
   const dir = mkdtempSync(path.join(os.tmpdir(),'study-test-'));
   const file = path.join(dir,'lecture.pdf'); writeFileSync(file,'%PDF-1.4\nfixture');
   const store = new Store(path.join(dir,'library')); const book = store.import(file);
+  store.updateSettings({aiConcurrency:1});
   book.count = count; book.extraction = 'done'; book.extracted = count;
   book.pages = Array.from({length:count},(_,i) => ({ number:i+1,text:`原頁${i+1}`,width:100,height:100,imageReady:true,lesson:'',status:'pending',messages:[] }));
   store.save(book);
@@ -162,6 +165,7 @@ test('indexing starts with the page the reader jumped to rather than assuming a 
 test('a final map arriving during a lesson preserves that answer and its partial-context provenance',async()=>{
   const f=setup(4);let engine:Engine|undefined;
   try{
+    f.store.updateSettings({aiConcurrency:2});
     withMap(f.book);f.book.map!.complete=false;f.book.map!.pages=f.book.map!.pages.slice(0,2);f.book.mapChunks=[f.book.map!.pages];f.book.mapStatus='running';
     let finishLesson:(text:string)=>void=()=>{};
     const provider:Provider={generate:async(prompt,images,_model,_instructions,_delta,schema:any)=>{
@@ -191,4 +195,41 @@ test('an old partially analyzed book exposes its saved index immediately without
     let calls=0;engine=new Engine(f.store,{generate:async()=>{calls++;return '';}},()=>{},()=>{});engine.activeId=f.book.id;engine.wake();
     assert.equal(f.book.map?.pages[0].topic,'已分析');assert.equal(f.book.map?.complete,false);assert.equal(calls,0);
   }finally{engine?.stop();f.cleanup();}
+});
+
+
+test('legacy settings migrate to bounded parallelism and concise lessons',()=>{
+  assert.deepEqual(normalizeSettings({model:'saved',paused:true}),{model:'saved',paused:true,aiConcurrency:4,pdfWorkers:2,lessonDetail:'concise'});
+  const bad=normalizeSettings({aiConcurrency:99,pdfWorkers:0,lessonDetail:'bad' as any});
+  assert.equal(bad.aiConcurrency,4);assert.equal(bad.pdfWorkers,2);assert.equal(bad.lessonDetail,'concise');
+});
+test('four lessons overlap, finish out of order, and remain attached to original pages',async()=>{
+  const f=setup(6);let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.store.updateSettings({aiConcurrency:4});const releases=new Map<number,(text:string)=>void>();
+    engine=new Engine(f.store,{generate:async(prompt)=>{
+      const n=Number(prompt.match(/針對第 (\d+) 頁撰寫/)![1]);
+      return new Promise<string>(resolve=>releases.set(n,resolve));
+    }},()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    await until(()=>releases.size===4);assert.equal(engine.progress.modelActive,4);assert.equal(engine.progress.activeLessons,4);
+    f.store.updateSettings({paused:true});f.book.currentPage=6;
+    for(const n of [4,2,3,1]){releases.get(n)!(`page ${n}`);await until(()=>f.book.pages[n-1].status==='done');}
+    for(const n of [1,2,3,4]){assert.equal(f.book.pages[n-1].lesson,`page ${n}`);assert.equal(f.book.pages[n-1].lessonDetail,'concise');}
+    assert.equal(f.book.pages[5].status,'pending');
+  }finally{engine?.stop();f.cleanup();}
+});
+test('live pool resizing preserves active requests and queued question priority',async()=>{
+  const pool=new PriorityPool(1);const starts:string[]=[];const releases=new Map<string,()=>void>();
+  const task=(name:string)=>pool.run(name==='question'?0:2,async()=>{starts.push(name);await new Promise<void>(r=>releases.set(name,r));});
+  const jobs=[task('first'),task('background'),task('question')];pool.setCapacity(2);
+  assert.deepEqual(starts,['first','question']);pool.setCapacity(1);releases.get('first')!();await jobs[0];
+  assert.deepEqual(starts,['first','question']);releases.get('question')!();await jobs[2];await until(()=>starts.length===3);
+  releases.get('background')!();await jobs[1];
+});
+test('lesson prompts adapt density without forcing filler or removing necessary steps',()=>{
+  const f=setup();try{
+    withMap(f.book);f.book.map!.pages[0].density='brief';f.book.map!.pages[1].density='dense';
+    assert.match(lessonGuide(f.book,1,'concise'),/40～120/);assert.match(lessonGuide(f.book,2,'concise'),/300～600/);
+    assert.match(lessonGuide(f.book,1,'detailed'),/簡單頁仍然簡短/);assert.match(lessonGuide(f.book,1,'concise'),/不可為縮短字數而省略必要定義/);
+  }finally{f.cleanup();}
 });
