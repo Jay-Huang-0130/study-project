@@ -259,3 +259,9 @@ OAuth 為優先需求，不自行替換成 API Key。第一個技術驗證必須
 - Background mode：https://developers.openai.com/api/docs/guides/background
 
 Prompt Caching 可優化重複輸入處理，無法取代本規格要求的本機講稿保存。
+
+## 15. v0.1.0 實作對照（2026-10-21）
+
+首版採 Windows x64 Electron 桌面程式，使用官方 Codex app-server 管理 ChatGPT OAuth。教材資料先採每份文件的 JSON 原子快照，未採用前述建議 SQLite。練習先提供最多 10 頁與 5 題的文字問答形式。
+
+功能已實作不等於全部驗收完成。真實授權後的模型輸入、教學準確性、長教材效能與另一台電腦的可攜使用仍待驗證；以 DEVLOG.md 與 docs/TESTING.md 記錄實際進度。
