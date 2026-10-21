@@ -86,3 +86,5 @@
 - 隔離的 0.6.0 packaged Electron UI：內文 13→20px（表格、問答同步），標題維持 23px；介面改 150% 標題 34.5px、tab 16.5px，內文仍 20px。超出範圍 IPC 拒絕。
 - 真正 PDF fixture 含兩章及巢狀小節：展開、搜尋、跳第 3 頁後講稿同步；無內建目錄 PDF 顯示頁序分組；重新啟動保留兩組字級；無 renderer 錯誤，模型 turn/start 為 0。
 - 打包 Windows portable 成功。真實模型品質沒有重新推論驗證，本次不改教學與排程。
+
+- GitHub Actions run 39611788403 成功，公開 v0.6.0 EXE 與校驗檔；latest API、附件清單與固定 checksum 下載驗證通過。單檔 portable 在無 Node.js PATH 的環境成功初始化 8 個模型選項、顯示 PDF 並翻頁。未登入且沒有教材推論。

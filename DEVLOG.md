@@ -19,6 +19,8 @@
 - 加入 Windows Release workflow，符合版本的 tag 觸發測試、編譯、可攜版與 SHA256 校驗檔，成功才發布 Releases；固定附件名方便分享下載連結。README 與 docs/RELEASING.md 說明朋友下載與後續發版。
 - 驗證：44 項測試全部通過、TypeScript/Vite 成功、Windows portable 打包成功。隔離的 Electron UI 驗證內文 13→20px 不動標題，介面 100→150% 不動內文；含表格與問答。多層 PDF 書籤、頁面跳轉、搜尋、無書籤回退、重新啟動保存全部通過，無 renderer 錯誤、0 次 AI 請求。
 - 未用真實教材或模型額度測試；真實語義品質沿用使用者已滿意的流程。App 內自動安裝更新與程式簽章尚未實作。
+- 發行結果：v0.6.0 tag 自動工作流程成功，Windows runner 再次通過測試／打包並公開 EXE（301,647,991 bytes）與 SHA256SUMS；已驗證 latest 頁和固定 checksum 下載入口。https://github.com/Jay-Huang-0130/study-project/releases/tag/v0.6.0
+- 單檔 portable 在移除 Node.js PATH 的隔離環境成功開啟 PDF、翻頁並初始化內附模型元件（8 個可用模型選項、尚未登入）；桌面捷徑已指向 app-0.6.0，沿用原資料路徑並核對 app.asar SHA256。
 
 ## 2026-10-21｜手動啟動與舊錯誤修復（0.5.1）
 
