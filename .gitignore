@@ -1,0 +1,38 @@
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+auth.json
+tokens.json
+*.pem
+*.key
+
+# Dependencies and generated builds
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+dist/
+build/
+target/
+coverage/
+
+# Local textbooks, application data, and temporary assets
+data/
+local-data/
+textbooks/
+cache/
+tmp/
+work/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
