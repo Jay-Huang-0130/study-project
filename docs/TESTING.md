@@ -96,3 +96,5 @@
 - 第一次 EXE 請求回 503：畫面顯示錯誤，可繼續使用舊版；重試成功下載；一般關閉重開仍為 0.6.99；按更新後真正安裝並自動啟動 0.7.0。
 - 自訂書庫在失去 --study-data-dir 參數後仍可讀取；快取講稿一致；未完成教材保持暫停；0 次 turn/start、0 renderer 錯誤。
 - 製品成功產生 Setup EXE、blockmap、latest.yml 與 portable EXE。此階段未簽章，Windows 信譽提示仍可能出現。
+
+- 公開 CI run 39614854549 成功；真正安裝的 0.7.0 程式連線 GitHub Releases feed 回報 current，空書庫及 0 次 AI 推論。正式安裝目錄 app.asar SHA256 與本機已驗證包一致。

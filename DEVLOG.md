@@ -19,6 +19,7 @@
 - 驗證：48 項測試、TypeScript、Vite 全部通過；Windows NSIS／portable 打包成功。
 - 完整隔離 E2E：建立 0.6.99 測試安裝版，透過 localhost feed 真正下載 0.7.0 安裝檔。模擬 503 中斷後重試成功；一般關閉不安裝；明確更新後 NSIS 安裝成功並自動重開至 0.7.0。自訂書庫路徑、原講稿保存，生成維持手動，renderer 錯誤 0、AI 請求 0。只使用獨立 fixture／profile。
 - 仍未簽章；沒有關閉 Windows 安全功能或保證消除 SmartScreen 提示。真實教學品質沿用原流程。
+- 公開驗證：GitHub Actions run 39614854549 全部成功，v0.7.0 安裝版及更新 metadata 已公開。已安裝版以隔離空書庫連到真正 GitHub feed，顯示「目前已是最新版本」（0.7.0），AI 請求 0。桌面捷徑已改由 LocalAppData/Programs/study-project 開啟，安裝 app.asar 與測試包 SHA256 一致。
 
 ## 2026-10-21｜字級、簡明目錄與發行自動化（0.6.0）
 
