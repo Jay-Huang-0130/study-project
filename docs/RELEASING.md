@@ -1,6 +1,6 @@
 # Windows 發行流程
 
-朋友使用：[最新發行版](https://github.com/Jay-Huang-0130/study-project/releases/latest) → 下載 `Study-Project-Windows.exe` → 放入可寫入的資料夾 → 雙擊 → 登入自己的 ChatGPT 帳號。無需原始碼或開發環境。
+朋友使用：[最新發行版](https://github.com/Jay-Huang-0130/study-project/releases/latest) → 下載 `Study-Project-Setup.exe` → 安裝一次 → 從桌面捷徑開啟 → 登入自己的 ChatGPT 帳號。無需原始碼或開發環境。
 
 ## 發布新版
 
@@ -14,7 +14,7 @@ git tag -a vX.Y.Z -m "Study Project X.Y.Z"
 git push origin vX.Y.Z
 ```
 
-5. 在 [Actions](https://github.com/Jay-Huang-0130/study-project/actions) 查看 Windows Release：安裝鎖定依賴 → 測試與編譯 → Windows 可攜版 → 校驗檔 → 上傳草稿 → 發布。
+5. 在 [Actions](https://github.com/Jay-Huang-0130/study-project/actions) 查看 Windows Release：安裝鎖定依賴 → 測試與編譯 → Windows 安裝版與可攜版 → 更新 metadata／校驗檔 → 上傳草稿 → 發布。
 
 工作流程使用 GitHub 自動提供的 `GITHUB_TOKEN`，僅要求 repository contents 寫入權限；不需要另存個人權杖。打包清單不含本機書庫或 OAuth 資料。自動產生的 release notes 列出提交內容；有需要可在 Releases 編輯成給使用者的更新說明。
 
@@ -22,7 +22,7 @@ git push origin vX.Y.Z
 
 ## 穩定下載入口
 
-[Windows 執行檔](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Windows.exe)
+[Windows 可攜版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Windows.exe)
 
 [SHA256SUMS.txt](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/SHA256SUMS.txt)
 
@@ -30,4 +30,8 @@ git push origin vX.Y.Z
 
 ## 更新與資料
 
-關閉舊版後，以新版執行檔替換原檔，保留 `StudyProjectData` 整個資料夾；資料路徑可在 App 設定開啟。跨電腦需重新登入，不應分享自己的帳號憑證。現階段提供下載更新，尚未實作 App 內自動安裝更新或程式簽章。
+安裝版啟動後查詢 GitHub Releases，依 latest.yml 下載對應版本的安裝檔並驗證 SHA512。設定內按「重新啟動並更新」才安裝，正常關閉不自動安裝。發布必須同時上傳 latest.yml、其 url 指向的版本化 Setup EXE，以及 blockmap；不要只上傳固定名稱的別名。
+
+[Windows 安裝版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Setup.exe)
+
+關閉舊版後，以新版執行檔替換原檔，保留 `StudyProjectData` 整個資料夾；資料路徑可在 App 設定開啟。跨電腦需重新登入，不應分享自己的帳號憑證。可攜版仍手動下載替換。安裝版使用 App 內更新；尚未實作程式簽章，Windows 警告仍可能出現。

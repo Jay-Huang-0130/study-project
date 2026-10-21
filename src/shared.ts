@@ -18,7 +18,8 @@ export interface Book {
 export interface BookSummary { id: string; name: string; count: number; currentPage: number; completed: number; createdAt: string; generationPaused:boolean; generationState:GenerationState; pauseReason?:string }
 export interface ModelOption { id: string; name: string; isDefault: boolean }
 export interface AuthState { connected: boolean; label: string; error?: string; models: ModelOption[] }
-export interface AppState extends StudySettings { books: BookSummary[]; active?: Book; auth: AuthState; activity: string; version:string; runtime:RuntimeStatus }
+export interface UpdateState { status:'unsupported'|'idle'|'checking'|'current'|'available'|'downloading'|'ready'|'installing'|'error'; version?:string; percent?:number; error?:string }
+export interface AppState extends StudySettings { books: BookSummary[]; active?: Book; auth: AuthState; activity: string; version:string; runtime:RuntimeStatus; update:UpdateState }
 export interface StudyAPI {
   state(id?: string): Promise<AppState>;
   importPDF(): Promise<string | null>;
@@ -35,6 +36,8 @@ export interface StudyAPI {
   exercise(id: string, start: number, end: number, count: number): Promise<void>;
   fullscreen(): Promise<void>;
   dataFolder(): Promise<void>;
+  checkUpdate():Promise<void>;
+  installUpdate():Promise<void>;
   onChange(callback: () => void): () => void;
   onDelta(callback: (event: { bookId: string; page: number; messageId?: string; generationId?: string; text: string }) => void): () => void;
 }

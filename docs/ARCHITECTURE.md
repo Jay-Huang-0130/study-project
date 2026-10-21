@@ -106,3 +106,11 @@ StudyProjectData/
 PDFViewer 在載入文件後讀取 getOutline，命名 destination 透過 getDestination 與 getPageIndex 轉成實體頁碼。只在當前 renderer session 記憶，不寫入教材、不呼叫 AI。reading-outline.ts 將書籤樹與既有逐頁索引合併，無目錄時回退每 8 頁分組；摘要為已有文字第一句／最多 64 字，並非新生成的章節摘要。畫面不再直接輸出密集 overview；底層 overview 及完整術語仍供原教學流程使用。
 
 GitHub Actions 在 Windows runner 安裝鎖定依賴並測試打包，使用 repository contents 寫入權限發布 portable EXE 和 SHA256SUMS。固定下載檔名與每個版本 tag 分離；不含個人書庫和登入狀態。
+
+## 0.7.0 安裝版與 App 內更新
+
+NSIS per-user 安裝版使用 electron-updater，固定公開 GitHub provider，啟動 4 秒後檢查新版本；autoDownload 關閉，收到 available 後由 Updates controller 啟動背景下載並向 renderer 發送狀態。下載進度／錯誤／ready 顯示在設定及右上角提示。autoInstallOnAppQuit=false，不允許 downgrade；使用者明確按下更新後才執行 quitAndInstall(true,true)。開發、win-unpacked 及可攜版不啟用檢查，以安裝目錄內的 NSIS uninstaller 識別安裝版。
+
+更新前暫停本次生成資格、保存 store、清空延遲寫入並等待 PDF workers／模型程序退出，才執行安裝。正常退出共用冪等 stopResources。下載錯誤不停止教學工作；安裝前保存失敗則不執行 installer。custom library 位置存在 userData/data-location.json，避免 installer 重啟時丟失 --study-data-dir 參數；便攜模式仍使用旁邊的 StudyProjectData。沒有新資料庫 schema，不遷移／覆寫原書庫。
+
+發版同時提供版本化 Setup EXE、其 blockmap、latest.yml（內含 SHA512）以及給使用者的固定名稱 Setup 別名。維持 portable 下載相容。未設定簽章憑證，沒有繞過 Windows 安全檢查；後續簽章可接入 CI。

@@ -2,19 +2,25 @@
 
 個人 AI 讀書導師：在同一視窗自由閱讀 PDF，對照逐頁文字講解並隨時追問。全書脈絡、背景生成與本機保存，讓閱讀能接續進行。
 
-目前版本為 Windows x64 桌面 Alpha（0.6.0）。閱讀與本機保存已完成實作及測試；OAuth 登入入口、教材脈絡與模型生成流程已串接，真實帳號授權後的完整教學品質仍待驗證。
+目前版本為 Windows x64 桌面 Alpha（0.7.0）。閱讀與本機保存已完成實作及測試；OAuth 登入入口、教材脈絡與模型生成流程已串接，真實帳號授權後的完整教學品質仍待驗證。
 
-## 給朋友下載
+## 給朋友下載（建議安裝版）
 
-前往 **[最新發行版](https://github.com/Jay-Huang-0130/study-project/releases/latest)**，下載 `Study-Project-Windows.exe`（Windows x64），放入可寫入的資料夾後雙擊即可。**不需要安裝 Node.js、Git 或下載原始碼。** Releases 頁的 Source code 壓縮檔是開發原始碼。
+[下載 Windows 安裝版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Setup.exe)，安裝一次後從桌面或開始功能表開啟 **Study Project**，不必每次重跑安裝檔，也不必安裝 Node.js 或 Git。每位使用者登入自己的 ChatGPT 帳號，使用自己的額度與教材。
 
-固定下載入口：[下載 Windows 版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Windows.exe)。每位使用者使用自己的 ChatGPT 帳號登入、自己的額度與本機教材。程式尚未簽章，Windows 可能顯示未知發行者。
+安裝版每次啟動會檢查更新，發現新版後背景下載。右上角會顯示進度／新版已備妥，設定內可手動檢查與按「重新啟動並更新」。按下後先停止生成、保存資料，再安裝並重開；生成仍等你手動繼續。一般關閉 App 不會自動安裝。斷網或下載失敗可在設定重試，不影響閱讀。
 
-更新時關閉 App，將新執行檔放回原資料夾，即可沿用旁邊的 `StudyProjectData`。這是下載新版後替換檔案，目前沒有 App 內自動更新。
+程式目前尚未簽章，安裝與更新仍可能顯示 Windows 未知發行者或 SmartScreen 警告。自動更新不是程式簽章。
+
+教材資料預設在 `%APPDATA%/study-project/library`，不放進程式安裝目錄；更新或解除安裝不主動刪除這些資料。設定可開啟資料資料夾。
+
+舊版可攜 EXE 不會自行轉成安裝版，需先下載安裝一次。若先前使用 `StudyProjectData`：關閉舊版，將該資料夾內的 `books`、`settings.json` 完整複製到安裝版的資料資料夾（搬移前先備份，避免覆蓋不同教材）。這台電腦原本使用預設 AppData 書庫的捷徑可直接沿用。
+
+[可攜版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Windows.exe)仍可使用，但不支援自動更新。Releases 的 Source code ZIP 是開發原始碼，並非桌面程式。
 
 ## 直接使用
 
-1. 雙擊桌面的 **Study Project** 捷徑，或專案內的 `Start-Study.cmd`。入口優先使用 `release/app-0.6.0/Study Project.exe`，不必每次解壓；也可單獨執行 `release/Study-Project-0.6.0-Windows.exe`。
+1. 雙擊桌面的 **Study Project** 捷徑，或專案內的 `Start-Study.cmd`。入口優先使用已安裝的程式，再回退到 `release/app-0.7.0/Study Project.exe`；也可單獨執行 `release/Study-Project-0.7.0-Windows.exe`。
 2. 開啟右上角設定，按「使用 ChatGPT 登入」，在系統瀏覽器完成登入後回到程式。
 3. 左下角圓形書庫按鈕可展開教材清單；選擇後自動收起。書庫浮在閱讀畫面上，不占 PDF 與講解寬度。匯入 PDF。可先翻閱本機預覽；按右下角「開始生成／繼續生成」後，才會送出教材 AI 請求。
 4. 使用底部頁碼或左右方向鍵翻頁，在右側提問；已完成的講稿與問答會自動保存。
@@ -98,4 +104,4 @@ npm run package
 
 ## 發行自動化
 
-詳見 [發行流程](docs/RELEASING.md)。推送符合 package.json 的 `vX.Y.Z` 標籤後，GitHub Actions 會測試、建置 Windows 可攜版並發布到 Releases，包含 SHA256 校驗檔。只有成功建置才會發布；不需個人權杖或上傳本機教材、登入資料。
+詳見 [發行流程](docs/RELEASING.md)。推送符合 package.json 的 `vX.Y.Z` 標籤後，GitHub Actions 會測試、建置 Windows 安裝版與可攜版並發布到 Releases，包含 latest.yml、差分更新 blockmap 與 SHA256 校驗檔。只有成功建置才會發布；不需個人權杖或上傳本機教材、登入資料。

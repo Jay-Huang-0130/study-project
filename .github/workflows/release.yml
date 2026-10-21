@@ -27,8 +27,8 @@ jobs:
           }
       - run: npm ci
       - run: npm run check
-      - name: Package portable app
-        run: node node_modules/electron-builder/cli.js --win portable --publish never
+      - name: Package installer and portable app
+        run: node node_modules/electron-builder/cli.js --win nsis portable --publish never
         env:
           ELECTRON_BUILDER_COMPRESSION_LEVEL: 1
       - name: Prepare download and checksum
@@ -36,8 +36,9 @@ jobs:
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           Copy-Item -LiteralPath "release/Study-Project-$version-Windows.exe" -Destination release/Study-Project-Windows.exe
-          $hash = (Get-FileHash -LiteralPath release/Study-Project-Windows.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  Study-Project-Windows.exe" | Set-Content -LiteralPath release/SHA256SUMS.txt -Encoding ascii
+          Copy-Item -LiteralPath "release/Study-Project-Setup-$version.exe" -Destination release/Study-Project-Setup.exe
+          $assets = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe','.blockmap' -or $_.Name -eq 'latest.yml' }
+          $assets | ForEach-Object { "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -LiteralPath release/SHA256SUMS.txt -Encoding ascii
       - name: Save build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -46,7 +47,9 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           path: |
-            release/Study-Project-Windows.exe
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
             release/SHA256SUMS.txt
       - name: Publish release
         shell: pwsh
@@ -56,10 +59,11 @@ jobs:
           $tag = '${{ github.ref_name }}'
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --verify-tag --draft --title "Study Project $tag" --generate-notes
+            gh release create $tag --verify-tag --draft --title "Study Project $tag" --notes-file docs/RELEASE-NOTES.md --generate-notes
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create draft release.' }
           }
-          gh release upload $tag release/Study-Project-Windows.exe release/SHA256SUMS.txt --clobber
+          $assets = @(Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe','.blockmap' -or $_.Name -in 'latest.yml','SHA256SUMS.txt' } | ForEach-Object { $_.FullName })
+          gh release upload $tag @assets --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Failed to upload release assets.' }
           gh release edit $tag --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release.' }

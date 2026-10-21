@@ -16,6 +16,8 @@ const api: StudyAPI = {
   exercise: (id,start,end,count) => ipcRenderer.invoke('study:exercise',id,start,end,count),
   fullscreen: () => ipcRenderer.invoke('study:fullscreen'),
   dataFolder: () => ipcRenderer.invoke('study:dataFolder'),
+  checkUpdate:()=>ipcRenderer.invoke('study:checkUpdate'),
+  installUpdate:()=>ipcRenderer.invoke('study:installUpdate'),
   onChange: callback => { const handler = () => callback(); ipcRenderer.on('study:change',handler); return () => ipcRenderer.removeListener('study:change',handler); },
   onDelta: callback => { const handler = (_: unknown, value: Parameters<Parameters<StudyAPI['onDelta']>[0]>[0]) => callback(value); ipcRenderer.on('study:delta',handler); return () => ipcRenderer.removeListener('study:delta',handler); },
 };

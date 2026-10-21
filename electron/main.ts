@@ -2,7 +2,10 @@ import { app, BrowserWindow, dialog, ipcMain, protocol, net, shell } from 'elect
 import { PDFLoader } from './pdf-loader';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync,existsSync,readFileSync } from 'node:fs';
+import electronUpdater from 'electron-updater';
+import { Updates } from './updates';
+import { atomicJSON } from './store';
 import { Store } from './store';
 import { CodexClient } from './codex';
 import { Engine } from './engine';
@@ -16,6 +19,7 @@ let win: BrowserWindow | undefined;
 let store: Store;
 let client: CodexClient;
 let engine: Engine;
+let updates:Updates;
 let auth: AuthState = { connected: false, label: '尚未登入', models: [] };
 const workers = new Map<string, PDFLoader>();
 const stoppingPDF=new Map<string,Promise<void>>();
@@ -87,7 +91,7 @@ function registerIPC() {
     if (event.sender !== win?.webContents || event.senderFrame !== win?.webContents.mainFrame) throw new Error('不允許此來源');
     return fn(...args);
   });
-  handle('study:state', (id?: string): AppState => ({ books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? store.book(id) : undefined, auth, ...store.settings, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
+  handle('study:state', (id?: string): AppState => ({ books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? store.book(id) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
   handle('study:import', async () => {
     const choice = await dialog.showOpenDialog(win!, { title: '選擇你的教材', filters: [{ name: 'PDF 教材', extensions: ['pdf'] }], properties: ['openFile'] });
     if (choice.canceled) return null;
@@ -167,6 +171,8 @@ function registerIPC() {
     await engine.ask(id,first,`請針對第 ${first}～${last} 頁出 ${count} 題理解練習。`,'exercise',{ start:first, end:last, count });
   });
   handle('study:dataFolder', () => shell.openPath(store.root));
+  handle('study:checkUpdate',()=>updates.check());
+  handle('study:installUpdate',()=>updates.install());
 }
 
 app.whenReady().then(async () => {
@@ -174,7 +180,11 @@ app.whenReady().then(async () => {
   const portableRoot = process.env.PORTABLE_EXECUTABLE_DIR;
   const dataArgument=process.argv.find(arg=>arg.startsWith('--study-data-dir='))?.slice('--study-data-dir='.length);
   if(dataArgument&&!path.isAbsolute(dataArgument))throw new Error('教材資料位置必須使用完整路徑。');
-  const data = process.env.STUDY_DATA_DIR ?? dataArgument ?? (portableRoot ? path.join(portableRoot, 'StudyProjectData') : path.join(app.getPath('userData'), 'library'));
+  const locationFile=path.join(app.getPath('userData'),'data-location.json');
+  const savedLocation=existsSync(locationFile)?JSON.parse(readFileSync(locationFile,'utf8')).path:undefined;
+  if(savedLocation!==undefined&&(typeof savedLocation!=='string'||!path.isAbsolute(savedLocation)))throw new Error('保存的教材位置無效。');
+  const data = process.env.STUDY_DATA_DIR ?? dataArgument ?? (portableRoot ? path.join(portableRoot, 'StudyProjectData') : savedLocation??path.join(app.getPath('userData'), 'library'));
+  if(!portableRoot&&!process.env.STUDY_DATA_DIR)atomicJSON(locationFile,{path:data});
   mkdirSync(data,{recursive:true});
   store = new Store(data);
   client = new CodexClient(path.join(app.getPath('userData'), 'oauth'), path.join(app.getPath('userData'), 'tutor-runtime'),app.getVersion());
@@ -198,6 +208,13 @@ app.whenReady().then(async () => {
     if (url.hostname !== 'book' || !match || !store.books.has(match[1])) return new Response('Not found', { status: 404 });
     return net.fetch(pathToFileURL(path.join(store.dir(match[1]), match[2])).href);
   });
+  const installed=app.isPackaged&&process.platform==='win32'&&!portableRoot&&existsSync(path.join(path.dirname(app.getPath('exe')),'Uninstall Study Project.exe'));
+  updates=new Updates(installed?electronUpdater.autoUpdater:undefined,changed,async()=>{
+    for(const book of store.books.values())if(book.generationStarted&&!book.generationPaused)engine.pauseBook(book.id,'正在更新程式');
+    // Keep explicit custom libraries across the installer's relaunch, which drops CLI arguments.
+    atomicJSON(locationFile,{path:store.root});
+    await stopResources();
+  });
   registerIPC();
   win = new BrowserWindow({ width: 1500, height: 960, minWidth: 1050, minHeight: 700, backgroundColor: '#f7f8fa', title: 'Study Project',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
@@ -210,16 +227,22 @@ app.whenReady().then(async () => {
   if (!process.env.STUDY_WINDOWED) win.maximize();
 
   void readAuth();
+  if(installed)setTimeout(()=>void updates.check(),4000).unref();
 }).catch(error => { dialog.showErrorBox('Study Project 無法啟動', `${error.message}\n原有資料未被覆寫。`); app.quit(); });
 let shuttingDown = false;
-app.on('before-quit', event => {
-  if (shuttingDown) return;
-  event.preventDefault(); shuttingDown = true; engine?.stop();
+let stopping:Promise<void>|undefined;
+function stopResources():Promise<void>{
+  if(stopping)return stopping;
+  engine?.stop();
   for(const [id,timer] of saveTimers){clearTimeout(timer);store.save(store.book(id));}saveTimers.clear();
   for(const id of workers.keys()){const b=store.book(id);b.extraction='pending';store.save(b);}
-  const cleanup: Promise<unknown>[] = [...workers.values()].map(w => w.stop());
-  cleanup.push(...stoppingPDF.values());
-  if (client) cleanup.push(client.close());
-  void Promise.allSettled(cleanup).then(() => app.quit());
+  const cleanup:Promise<unknown>[]=[...workers.values()].map(w=>w.stop());
+  cleanup.push(...stoppingPDF.values());if(client)cleanup.push(client.close());
+  stopping=Promise.allSettled(cleanup).then(()=>{});return stopping;
+}
+app.on('before-quit',event=>{
+  if(shuttingDown)return;
+  event.preventDefault();
+  void stopResources().then(()=>{shuttingDown=true;app.quit();});
 });
 app.on('window-all-closed', () => app.quit());

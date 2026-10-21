@@ -88,3 +88,11 @@
 - 打包 Windows portable 成功。真實模型品質沒有重新推論驗證，本次不改教學與排程。
 
 - GitHub Actions run 39611788403 成功，公開 v0.6.0 EXE 與校驗檔；latest API、附件清單與固定 checksum 下載驗證通過。單檔 portable 在無 Node.js PATH 的環境成功初始化 8 個模型選項、顯示 PDF 並翻頁。未登入且沒有教材推論。
+
+## 0.7.0 自動更新驗證
+
+- npm run check：48 項通過；新增更新 controller 的背景下載、禁止自動安裝／降版、重複觸發、等待保存、離線／下載失敗重試、保存失敗禁止安裝等測試。
+- 實際 NSIS E2E：0.6.99 → 0.7.0，獨立安裝目錄、profile、自訂 library、mock account runtime。localhost feed 使用真正 latest.yml／SHA512／版本化 installer；不改 production feed。
+- 第一次 EXE 請求回 503：畫面顯示錯誤，可繼續使用舊版；重試成功下載；一般關閉重開仍為 0.6.99；按更新後真正安裝並自動啟動 0.7.0。
+- 自訂書庫在失去 --study-data-dir 參數後仍可讀取；快取講稿一致；未完成教材保持暫停；0 次 turn/start、0 renderer 錯誤。
+- 製品成功產生 Setup EXE、blockmap、latest.yml 與 portable EXE。此階段未簽章，Windows 信譽提示仍可能出現。
