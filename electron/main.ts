@@ -125,6 +125,9 @@ function registerIPC() {
     await engine.ask(id, pageNumber(id,value), question, kind);
   });
   handle('study:fullscreen', () => win?.setFullScreen(!win.isFullScreen()));
+  handle('study:deleteMessage',(id:string,value:number,messageId:string)=>{
+    store.deleteMessage(id,pageNumber(id,value),messageId);changed();
+  });
   handle('study:exercise', async (id: string, start: number, end: number, count: number) => {
     const first = pageNumber(id,start), last = pageNumber(id,end);
     if (last < first || last-first >= 10 || !Number.isInteger(count) || count < 1 || count > 5) throw new Error('每次可選 1～10 頁，並產生 1～5 題。');

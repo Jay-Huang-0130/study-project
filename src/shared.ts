@@ -26,6 +26,7 @@ export interface StudyAPI {
   settings(settings: Partial<StudySettings>): Promise<void>;
   retry(id: string, page?: number): Promise<void>;
   ask(id: string, page: number, question: string, kind?: 'question' | 'exercise'): Promise<void>;
+  deleteMessage(id:string,page:number,messageId:string):Promise<void>;
   exercise(id: string, start: number, end: number, count: number): Promise<void>;
   fullscreen(): Promise<void>;
   dataFolder(): Promise<void>;

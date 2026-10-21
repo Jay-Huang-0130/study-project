@@ -10,6 +10,7 @@ const api: StudyAPI = {
   settings: value => ipcRenderer.invoke('study:settings',value),
   retry: (id,n) => ipcRenderer.invoke('study:retry',id,n),
   ask: (id,n,q,kind) => ipcRenderer.invoke('study:ask',id,n,q,kind),
+  deleteMessage:(id,n,messageId)=>ipcRenderer.invoke('study:deleteMessage',id,n,messageId),
   exercise: (id,start,end,count) => ipcRenderer.invoke('study:exercise',id,start,end,count),
   fullscreen: () => ipcRenderer.invoke('study:fullscreen'),
   dataFolder: () => ipcRenderer.invoke('study:dataFolder'),

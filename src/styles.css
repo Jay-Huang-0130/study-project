@@ -6,3 +6,5 @@
 
 .analysis-preview{padding:16px;margin-bottom:20px;background:#f6f9f2;border:1px solid #e6edde;border-radius:9px}.analysis-preview>strong{font-size:11px;color:#688660}.analysis-preview .markdown{font-size:12px;margin-top:10px}.analysis-preview>small{font-size:9px;color:#9aa790}
 .settings-modal{max-height:90vh;overflow-y:auto}.version-label{margin-top:-10px;color:#738277;font-size:12px}.parallel-fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}.parallel-fields label{display:block}.parallel-fields select{display:block;width:100%;margin-top:8px}
+
+.exchange-heading{display:flex;align-items:flex-start;gap:8px}.exchange-heading .question-bubble{flex:1;min-width:0;overflow-wrap:anywhere}.delete-message{flex-shrink:0;color:#8d9790;margin-top:3px}.delete-message:hover:not(:disabled){color:#b14242;background:#fbebeb}

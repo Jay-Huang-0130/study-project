@@ -44,6 +44,18 @@ export class Store {
   book(id: string) { const b = this.books.get(id); if (!b) throw new Error('找不到教材'); return b; }
   dir(id: string) { this.book(id); return path.join(this.root, 'books', id); }
   save(book: Book) { atomicJSON(path.join(this.root, 'books', book.id, 'book.json'), book); }
+  deleteMessage(id:string,n:number,messageId:string){
+    const book=this.book(id);
+    if(!Number.isInteger(n)||n<1||n>book.count)throw new Error('頁碼不在教材範圍內');
+    if(typeof messageId!=='string'||!messageId)throw new Error('問答紀錄無效');
+    const page=book.pages[n-1],message=page.messages.find(m=>m.id===messageId);
+    if(!message)throw new Error('找不到這筆問答紀錄');
+    if(message.status==='running'||message.status==='pending')throw new Error('請等待回答完成後再刪除');
+    const messages=page.messages.filter(m=>m.id!==messageId);
+    // Persist first so a failed disk write leaves the visible history intact.
+    this.save({...book,pages:book.pages.map(p=>p===page?{...p,messages}:p)});
+    page.messages=messages;
+  }
   updateSettings(value: Partial<typeof this.settings>) { Object.assign(this.settings, value); atomicJSON(path.join(this.root, 'settings.json'), this.settings); }
   import(file: string): Book {
     const bytes = readFileSync(file);

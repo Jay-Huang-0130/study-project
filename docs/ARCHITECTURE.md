@@ -1,4 +1,4 @@
-# 0.3.0 架構與限制
+# 0.3.1 架構與限制
 
 ## 程序分工
 
@@ -69,4 +69,8 @@ StudyProjectData/
 
 ## 啟動與資料位置
 
-桌面捷徑直接啟動 `release/app-0.3.0/Study Project.exe`，用 `--study-data-dir=` 沿用既有教材目錄，避免單檔每次解壓與書庫位置改變。專案內 `Start-Study.cmd` 為備用入口，資料位置指標位於未提交的 release/data-location.txt。
+桌面捷徑直接啟動 `release/app-0.3.1/Study Project.exe`，用 `--study-data-dir=` 沿用既有教材目錄，避免單檔每次解壓與書庫位置改變。專案內 `Start-Study.cmd` 為備用入口，資料位置指標位於未提交的 release/data-location.txt。
+
+## 逐筆刪除問答
+
+透過限定來源 IPC，Store 驗證書本、頁碼和訊息 ID；禁止刪除 pending/running 紀錄。先原子保存移除後的書本快照，再更新記憶體中的訊息陣列。後續問答只讀取仍存在的紀錄，已刪除的練習不再作為後續題目範圍。

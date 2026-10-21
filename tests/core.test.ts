@@ -233,3 +233,38 @@ test('lesson prompts adapt density without forcing filler or removing necessary 
     assert.match(lessonGuide(f.book,1,'detailed'),/簡單頁仍然簡短/);assert.match(lessonGuide(f.book,1,'concise'),/不可為縮短字數而省略必要定義/);
   }finally{f.cleanup();}
 });
+
+
+test('deleting one exchange persists across restart without changing lessons or other pages',()=>{
+  const f=setup();try{
+    const message=(id:string)=>({id,question:id,answer:'回答',status:'done' as const,kind:'question' as const,createdAt:''});
+    f.book.pages[0].lesson='講稿';f.book.pages[0].status='done';f.book.pages[0].messages=[message('remove'),message('keep')];
+    f.book.pages[1].messages=[message('other-page')];f.store.save(f.book);
+    f.store.deleteMessage(f.book.id,1,'remove');
+    const restored=new Store(f.store.root).book(f.book.id);
+    assert.deepEqual(restored.pages[0].messages.map(m=>m.id),['keep']);assert.equal(restored.pages[0].lesson,'講稿');
+    assert.deepEqual(restored.pages[1].messages.map(m=>m.id),['other-page']);
+  }finally{f.cleanup();}
+});
+test('deletion rejects active exchanges, wrong page and unknown IDs',()=>{
+  const f=setup();try{
+    f.book.pages[0].messages=[{id:'active',question:'問題',answer:'部分回答',status:'running',kind:'question',createdAt:''}];
+    assert.throws(()=>f.store.deleteMessage(f.book.id,1,'active'),/等待回答完成/);
+    assert.throws(()=>f.store.deleteMessage(f.book.id,2,'active'),/找不到/);
+    assert.throws(()=>f.store.deleteMessage(f.book.id,0,'active'),/頁碼/);
+    assert.throws(()=>f.store.deleteMessage(f.book.id,1,'missing'),/找不到/);
+    assert.equal(f.book.pages[0].messages.length,1);
+  }finally{f.cleanup();}
+});
+test('deleted exercises and failed exchanges are absent from later model context',async()=>{
+  const f=setup();let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.book.pages[0].messages=[
+      {id:'exercise',question:'deleted exercise marker',answer:'舊練習',status:'done',kind:'exercise',sourcePages:[1,2,3],createdAt:''},
+      {id:'failed',question:'失敗問題',answer:'',status:'error',kind:'question',createdAt:''}];
+    f.store.deleteMessage(f.book.id,1,'exercise');f.store.deleteMessage(f.book.id,1,'failed');
+    let prompt='';engine=new Engine(f.store,{generate:async(input)=>{prompt=input;return '新回答';}},()=>{},()=>{});engine.authenticated=true;
+    await engine.ask(f.book.id,1,'新問題');assert.ok(!prompt.includes('deleted exercise marker'));
+    assert.equal(f.book.pages[0].messages.length,1);assert.equal(f.book.pages[0].messages[0].question,'新問題');
+  }finally{engine?.stop();f.cleanup();}
+});
