@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, protocol, net, shell } from 'elect
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { mkdirSync } from 'node:fs';
 import { Store } from './store';
 import { CodexClient } from './codex';
 import { Engine } from './engine';
@@ -17,8 +18,11 @@ let client: CodexClient;
 let engine: Engine;
 let auth: AuthState = { connected: false, label: '尚未登入', models: [] };
 const workers = new Map<string, Worker>();
+const saveTimers = new Map<string, NodeJS.Timeout>();
 let authReading = false;
-const changed = () => { if (win && !win.isDestroyed()) win.webContents.send('study:change'); };
+let changeTimer:NodeJS.Timeout|undefined;
+const changed = () => { if(changeTimer)return;changeTimer=setTimeout(()=>{changeTimer=undefined;if(win&&!win.isDestroyed())win.webContents.send('study:change');},60); };
+function saveSoon(id:string){if(saveTimers.has(id))return;saveTimers.set(id,setTimeout(()=>{saveTimers.delete(id);store.save(store.book(id));},250));}
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 
 async function readAuth() {
@@ -44,7 +48,7 @@ function extract(id: string) {
   const b = store.book(id);
   if (b.extraction === 'done') return;
   b.extraction = 'running'; b.extractionError = undefined; store.save(b); changed();
-  const worker = new Worker(path.join(app.getAppPath(), 'electron/pdf-worker.mjs'), { workerData: { file: path.join(store.dir(id), 'source.pdf'), dir: store.dir(id) } });
+  const worker = new Worker(path.join(app.getAppPath(), 'electron/pdf-worker.mjs'), { workerData: { file: path.join(store.dir(id), 'source.pdf'), dir: store.dir(id), currentPage:b.currentPage, ready:b.pages.filter(p=>p.imageReady).map(p=>p.number) } });
   workers.set(id, worker);
   const failed = (error: string) => { b.extraction = 'error'; b.extractionError = error; store.save(b); changed(); workers.delete(id); };
   worker.on('message', msg => {
@@ -52,16 +56,19 @@ function extract(id: string) {
       b.count = msg.count;
       if (!b.pages.length) b.pages = Array.from({ length: b.count }, (_,i): Page => ({ number: i+1, text: '', width: 0, height: 0, imageReady: false, lesson: '', status: 'pending', messages: [] }));
     }
-    if (msg.type === 'page') {
-      Object.assign(b.pages[msg.number-1], { text: msg.text, width: msg.width, height: msg.height, imageReady: true });
-      b.extracted = msg.number;
+    if(msg.type==='text'){
+      Object.assign(b.pages[msg.number-1],{text:msg.text,width:msg.width,height:msg.height});
+      saveSoon(id);changed();return;
     }
+    if(msg.type==='textDone')b.textReady=true;
+    if (msg.type === 'page') { b.pages[msg.number-1].imageReady=true; b.extracted=b.pages.filter(p=>p.imageReady).length; }
     if (msg.type === 'done') { b.extraction = 'done'; workers.delete(id); engine.wake(); }
     if (msg.type === 'error') { failed(msg.error); return; }
     store.save(b); changed();
+    engine.wake();
   });
   worker.on('error', error => failed(error.message));
-  worker.on('exit', code => { if (workers.has(id)) failed(`PDF 處理中斷（${code}），請重試。`); });
+  worker.on('exit', code => { if(workers.has(id)){if(shuttingDown){b.extraction='pending';store.save(b);workers.delete(id);}else failed(`PDF 處理中斷（${code}），請重試。`);} });
 }
 function pageNumber(id: string, value: unknown) {
   const b = store.book(id); const n = Number(value);
@@ -82,6 +89,7 @@ function registerIPC() {
   });
   handle('study:navigate', (id: string, value: number) => {
     const b = store.book(id); b.currentPage = pageNumber(id,value); store.save(b); engine.activeId = id;
+    workers.get(id)?.postMessage({type:'prioritize',page:b.currentPage});
     if (b.extraction === 'pending') extract(id);
     changed(); engine.wake();
   });
@@ -129,10 +137,19 @@ function registerIPC() {
 app.whenReady().then(async () => {
   if (!singleInstance) return;
   const portableRoot = process.env.PORTABLE_EXECUTABLE_DIR;
-  const data = process.env.STUDY_DATA_DIR ?? (portableRoot ? path.join(portableRoot, 'StudyProjectData') : path.join(app.getPath('userData'), 'library'));
+  const dataArgument=process.argv.find(arg=>arg.startsWith('--study-data-dir='))?.slice('--study-data-dir='.length);
+  if(dataArgument&&!path.isAbsolute(dataArgument))throw new Error('教材資料位置必須使用完整路徑。');
+  const data = process.env.STUDY_DATA_DIR ?? dataArgument ?? (portableRoot ? path.join(portableRoot, 'StudyProjectData') : path.join(app.getPath('userData'), 'library'));
+  mkdirSync(data,{recursive:true});
   store = new Store(data);
   client = new CodexClient(path.join(app.getPath('userData'), 'oauth'), path.join(app.getPath('userData'), 'tutor-runtime'));
-  engine = new Engine(store, client, changed, event => { if (win && !win.isDestroyed()) win.webContents.send('study:delta',event); });
+  const streams=new Map<string,Parameters<ConstructorParameters<typeof Engine>[3]>[0]>();
+  let streamTimer:NodeJS.Timeout|undefined;
+  engine = new Engine(store, client, changed, event => {
+    streams.set(`${event.bookId}:${event.page}:${event.messageId??'lesson'}`,event);
+    if(streamTimer)return;
+    streamTimer=setTimeout(()=>{streamTimer=undefined;if(win&&!win.isDestroyed())for(const value of streams.values())win.webContents.send('study:delta',value);streams.clear();},100);
+  });
   client.on('notification', (method: string, params: any) => {
     if (method === 'account/updated' || method === 'account/login/completed') {
       if (method === 'account/login/completed' && !params.success) { auth.error = '登入未完成，請重新登入。'; changed(); }
@@ -162,6 +179,7 @@ let shuttingDown = false;
 app.on('before-quit', event => {
   if (shuttingDown) return;
   event.preventDefault(); shuttingDown = true; engine?.stop();
+  for(const [id,timer] of saveTimers){clearTimeout(timer);store.save(store.book(id));}saveTimers.clear();
   const cleanup: Promise<unknown>[] = [...workers.values()].map(w => w.terminate());
   if (client) cleanup.push(client.close());
   void Promise.allSettled(cleanup).then(() => app.quit());

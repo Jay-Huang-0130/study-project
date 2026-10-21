@@ -1,10 +1,13 @@
 {
   "name": "study-project",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "個人 PDF 讀書導師",
   "type": "module",
-  "overrides": { "katex": "$katex", "global-agent": "^4.1.3" },
+  "overrides": {
+    "katex": "$katex",
+    "global-agent": "^4.1.3"
+  },
   "main": "dist-electron/main.cjs",
   "scripts": {
     "start": "electron .",

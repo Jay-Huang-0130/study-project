@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Store } from '../electron/store';
 import { Engine, nextPage, validateMapChunk, acceptsResult, type Provider } from '../electron/engine';
 import type { Book } from '../src/shared';
+import { PriorityPool } from '../electron/priority-pool';
 
 function setup(count = 3) {
   const dir = mkdtempSync(path.join(os.tmpdir(),'study-test-'));
@@ -75,23 +76,23 @@ test('question answer stays with submitted page while user changes pages', async
     assert.equal(f.book.pages[0].messages[0].answer,'因為原頁的定義。'); assert.equal(f.book.pages[2].messages.length,0);
   } finally { engine?.stop(); f.cleanup(); }
 });
-test('map chunks are persisted and no lessons start until whole-book overview exists', async () => {
-  const f=setup(7); let engine:Engine|undefined;
+test('available pages get lessons and accept questions before remaining images or full map finish', async () => {
+  const f=setup(8);let engine:Engine|undefined;
   try {
-    const imageCounts:number[]=[]; let calls=0;
-    const provider:Provider={generate:async(_prompt,images)=>{
-      calls++; imageCounts.push(images.length);
-      if(calls<=2){const numbers=calls===1?[1,2,3,4,5,6]:[7];return JSON.stringify({pages:numbers.map(page=>({page,topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});}
-      if(calls===3){f.store.settings.paused=true;return JSON.stringify({overview:'全書順序',terms:[],links:Array.from({length:7},(_,i)=>({page:i+1,relatedPages:i===6?[1]:[]}))});}
-      throw new Error('Should not generate a lesson before requested');
+    f.book.extraction='running';for(const p of f.book.pages.slice(2))p.imageReady=false;
+    const provider:Provider={generate:async(prompt,images,_model,_instructions,_delta,schema:any)=>{
+      if(schema?.properties?.pages)return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
+      if(prompt.includes('撰寫一對一')){f.store.settings.paused=true;return '第一頁已經可以閱讀';}
+      return '可以先回答這一頁';
     }};
     engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
-    await until(()=>f.book.mapStatus==='done'); assert.deepEqual(imageCounts,[6,1,0]);
-    assert.equal(f.book.pages.filter(p=>p.status==='done').length,0);
-    assert.equal(new Store(f.store.root).book(f.book.id).map?.pages.length,7);
-    assert.deepEqual(f.book.map!.pages[6].relatedPages,[1]);
-  } finally {engine?.stop();f.cleanup();}
+    await until(()=>f.book.pages[0].status==='done');
+    assert.equal(f.book.extraction,'running');assert.equal(f.book.map?.complete,false);assert.equal(f.book.map?.pages.length,2);
+    assert.equal(f.book.pages[0].contextComplete,false);assert.equal(f.book.pages[0].contextPages,2);
+    await engine.ask(f.book.id,1,'這一頁可以先問嗎？');assert.equal(f.book.pages[0].messages[0].status,'done');
+  }finally{engine?.stop();f.cleanup();}
 });
+
 test('current source image is retained even when many earlier pages are related', async () => {
   const f=setup(100); let engine:Engine|undefined;
   try {
@@ -144,4 +145,50 @@ test('shutdown returns interrupted lessons to pending for automatic continuation
     assert.equal(new Store(f.store.root).book(f.book.id).pages[0].status,'pending');
     assert.equal(f.store.settings.paused,false);
   } finally {engine?.stop();f.cleanup();}
+});
+test('indexing starts with the page the reader jumped to rather than assuming a contiguous prefix',async()=>{
+  const f=setup(100);let engine:Engine|undefined;
+  try{
+    f.book.currentPage=70;
+    const provider:Provider={generate:async(_prompt,images)=>{
+      f.store.settings.paused=true;
+      return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
+    }};
+    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    await until(()=>!!f.book.map);assert.deepEqual(f.book.map!.pages.map(p=>p.page),[70,71]);
+    assert.equal(f.book.mapChunks.flat().length,2);
+  }finally{engine?.stop();f.cleanup();}
+});
+test('a final map arriving during a lesson preserves that answer and its partial-context provenance',async()=>{
+  const f=setup(4);let engine:Engine|undefined;
+  try{
+    withMap(f.book);f.book.map!.complete=false;f.book.map!.pages=f.book.map!.pages.slice(0,2);f.book.mapChunks=[f.book.map!.pages];f.book.mapStatus='running';
+    let finishLesson:(text:string)=>void=()=>{};
+    const provider:Provider={generate:async(prompt,images,_model,_instructions,_delta,schema:any)=>{
+      if(schema?.properties?.pages)return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
+      if(schema?.properties?.links){f.store.settings.paused=true;return JSON.stringify({overview:'全書完成',terms:[],links:[1,2,3,4].map(page=>({page,relatedPages:[]}))});}
+      return new Promise<string>(resolve=>finishLesson=resolve);
+    }};
+    engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;engine.authenticated=true;engine.wake();
+    await until(()=>f.book.mapStatus==='done');finishLesson('原頁講解，不應因地圖擴充而丟失');
+    await until(()=>f.book.pages[0].status==='done');
+    assert.equal(f.book.pages[0].contextComplete,false);assert.equal(f.book.pages[0].contextPages,2);
+    assert.equal(f.book.pages[0].lesson,'原頁講解，不應因地圖擴充而丟失');
+  }finally{engine?.stop();f.cleanup();}
+});
+test('question requests overtake queued background work and total provider concurrency stays at two',async()=>{
+  const pool=new PriorityPool(2);const starts:string[]=[];let active=0,maxActive=0;
+  const releases=new Map<string,()=>void>();
+  const task=(name:string)=>async()=>{starts.push(name);active++;maxActive=Math.max(maxActive,active);await new Promise<void>(resolve=>releases.set(name,resolve));active--;return name;};
+  const a=pool.run(2,task('index')),b=pool.run(1,task('lesson')),c=pool.run(2,task('background')),q=pool.run(0,task('question'));
+  releases.get('index')!();await a;await until(()=>starts.length===3);assert.equal(starts[2],'question');
+  releases.get('lesson')!();await b;await until(()=>starts.length===4);releases.get('question')!();releases.get('background')!();await Promise.all([q,c]);assert.equal(maxActive,2);
+});
+test('an old partially analyzed book exposes its saved index immediately without another model request',()=>{
+  const f=setup(8);let engine:Engine|undefined;
+  try{
+    f.book.mapChunks=[[{page:1,topic:'已分析',summary:'既有紀錄',terms:[],relatedPages:[]}]];
+    let calls=0;engine=new Engine(f.store,{generate:async()=>{calls++;return '';}},()=>{},()=>{});engine.activeId=f.book.id;engine.wake();
+    assert.equal(f.book.map?.pages[0].topic,'已分析');assert.equal(f.book.map?.complete,false);assert.equal(calls,0);
+  }finally{engine?.stop();f.cleanup();}
 });

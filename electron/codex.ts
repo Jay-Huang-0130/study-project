@@ -60,7 +60,7 @@ export class CodexClient extends EventEmitter {
         if (msg.error) waiting.reject(new Error(msg.error.message)); else waiting.resolve(msg.result);
       } else if (msg.method) this.emit('notification', msg.method, msg.params);
     });
-    await this.call('initialize', { clientInfo: { name: 'study_project', title: 'Study Project', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+    await this.call('initialize', { clientInfo: { name: 'study_project', title: 'Study Project', version: '0.2.0' }, capabilities: { experimentalApi: true } });
     this.send({ method: 'initialized' });
   }
   private failed(error: Error) {

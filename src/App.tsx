@@ -35,7 +35,7 @@ export function App() {
   },[]);
   useEffect(() => {
     void refresh(); const off = window.study.onChange(() => void refresh());
-    const delta = window.study.onDelta(e => setStreams(s => ({ ...s, [`${e.bookId}:${e.page}:${e.messageId ?? 'lesson'}`]: e.text })));
+    const delta = window.study.onDelta(e => setStreams(s => ({ ...s, [`${e.bookId}:${e.page}:${e.messageId ?? `lesson:${e.generationId ?? ''}`}`]: e.text })));
     return () => { off(); delta(); };
   },[refresh]);
   const run = async (task: () => Promise<unknown>) => { try { await task(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
@@ -47,6 +47,7 @@ export function App() {
   };
   const importPDF = () => run(async () => { const id = await window.study.importPDF(); if (id) await select(id); });
   const book = state.active; const n = book?.currentPage ?? 1; const page = book?.pages[n-1];
+  const pageOutline = book?.map?.pages.find(p => p.page === n);
   const navigate = (value: number) => {
     if (!book || value < 1 || value > book.count) return;
     void run(() => window.study.navigate(book.id,value));
@@ -97,13 +98,16 @@ export function App() {
           <div className="divider" onPointerDown={dragDivider} title="拖曳調整兩側寬度"><i/></div>
           <section className="tutor-panel"><div className="panel-toolbar"><div className="tabs"><button className={tab==='lesson'?'active':''} onClick={() => setTab('lesson')}><Sparkles size={15}/>老師講解</button><button className={tab==='map'?'active':''} onClick={() => setTab('map')}>教材脈絡</button></div><span className="page-badge">第 {n} 頁</span></div>
             <div className="transcript" ref={scroll}>{tab === 'map' ? <MapContent book={book} navigate={navigate}/> : <>
-              <div className="lesson-heading"><span className="tutor-avatar"><Sparkles size={18}/></span><div><strong>一起讀懂這一頁</strong><small>{page?.status === 'done' ? '已保存 · 下次開啟可直接閱讀' : '以原始教材與全書脈絡為依據'}</small></div></div>
-              {page?.status === 'done' ? <Markdown text={page.lesson} navigate={navigate}/> : page?.status === 'running' ? <><div className="generating-label"><i/>正在準備講解…</div><Markdown text={streams[`${book.id}:${n}:lesson`] ?? ''} navigate={navigate}/></> : <Preparation book={book} page={page} connected={state.auth.connected} paused={state.paused} login={() => setSettings(true)} retry={() => void run(() => window.study.retry(book.id,page?.status === 'error' ? n : undefined))}/>}
+              <div className="lesson-heading"><span className="tutor-avatar"><Sparkles size={18}/></span><div><strong>一起讀懂這一頁</strong><small>{page?.status === 'done' ? page.contextComplete === false ? `已保存 · 參考 ${page.contextPages ?? 0}/${book.count} 頁，完整脈絡尚未套用` : '已保存 · 下次開啟可直接閱讀' : '以原始教材與全書脈絡為依據'}</small></div></div>
+              {book.map && book.mapStatus !== 'done' && <div className="analysis-progress"><span>已分析 {book.map.pages.length}/{book.count} 頁 · 已完成的講解可先讀</span><progress max={book.count} value={book.map.pages.length}/></div>}
+              {page?.status === 'done' && page.contextComplete === false && book.mapStatus === 'done' && <button className="text-button" onClick={() => void run(() => window.study.retry(book.id,n))}><RefreshCw size={13}/>以完整教材脈絡更新這頁講解</button>}
+              {page?.status !== 'done' && pageOutline && <div className="analysis-preview"><strong>本頁重點已可閱讀</strong><Markdown text={pageOutline.summary} navigate={navigate}/><small>逐步講解會接著顯示，不必等其他頁分析完成。</small></div>}
+              {page?.status === 'done' ? <Markdown text={page.lesson} navigate={navigate}/> : page?.status === 'running' ? <><div className="generating-label"><i/>正在準備講解…</div><Markdown text={streams[`${book.id}:${n}:lesson:${page.generationId ?? ''}`] ?? ''} navigate={navigate}/></> : <Preparation book={book} page={page} connected={state.auth.connected} paused={state.paused} login={() => setSettings(true)} retry={() => void run(() => window.study.retry(book.id,page?.status === 'error' ? n : undefined))}/>}
               {page?.status === 'done' && <button className="exercise-button" disabled={!state.auth.connected || sending} onClick={() => setExercise({start:n,end:n,count:2})}><CircleHelp size={16}/>練習一下，確認我懂了 <ArrowRight size={15}/></button>}
               {!!page?.messages.length && <div className="conversation-label">這一頁的提問 <span>{page.messages.length}</span></div>}
               {page?.messages.map(m => <article className="exchange" key={m.id}><div className="question-bubble">{m.question}</div><div className="answer-label"><Sparkles size={13}/> 老師的回答 {m.status === 'running' && <span>· 正在回答</span>}</div>{m.status === 'error' ? <div className="error-box">{m.error}<button className="text-button" onClick={() => setQuestion(m.question)}>重新編輯問題</button></div> : <Markdown text={m.status === 'running' ? streams[`${book.id}:${n}:${m.id}`] ?? '正在思考你的問題…' : m.answer} navigate={navigate}/>}</article>)}
             </>}</div>
-            <form className="composer" onSubmit={e => { e.preventDefault(); ask(); }}><textarea value={question} maxLength={12000} onChange={e => setQuestion(e.target.value)} placeholder={`關於第 ${n} 頁，哪裡還不太懂？`} aria-label="向老師提問" disabled={!book.map || !state.auth.connected} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); ask(); } }}/><div className="composer-bottom"><span>{sending ? '老師正在回答，完成後可繼續提問' : 'Enter 送出 · Shift + Enter 換行'}</span><button className="send-button" type="submit" disabled={sending || !question.trim() || !book.map || !state.auth.connected} aria-label="送出問題"><ArrowUp size={18}/></button></div></form>
+            <form className="composer" onSubmit={e => { e.preventDefault(); ask(); }}><textarea value={question} maxLength={12000} onChange={e => setQuestion(e.target.value)} placeholder={`關於第 ${n} 頁，哪裡還不太懂？`} aria-label="向老師提問" disabled={!book.map?.pages.some(p => p.page === n) || !page?.imageReady || !state.auth.connected} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); ask(); } }}/><div className="composer-bottom"><span>{sending ? '老師正在回答，完成後可繼續提問' : 'Enter 送出 · Shift + Enter 換行'}</span><button className="send-button" type="submit" disabled={sending || !question.trim() || !book.map?.pages.some(p => p.page === n) || !page?.imageReady || !state.auth.connected} aria-label="送出問題"><ArrowUp size={18}/></button></div></form>
           </section>
         </div>
         <footer className="statusbar"><span><i className={state.paused ? 'paused' : ''}/>{state.paused ? '背景生成已暫停' : state.activity}</span><div><span>紀錄保存在本機</span><button onClick={() => void run(() => window.study.settings({ paused: !state.paused }))}>{state.paused ? <Play size={13}/> : <Pause size={13}/>} {state.paused ? '繼續生成' : '暫停生成'}</button></div></footer>
@@ -118,11 +122,11 @@ export function App() {
 }
 function Preparation({book,page,connected,paused,login,retry}: { book: Book; page?: Page; connected: boolean; paused: boolean; login: () => void; retry: () => void }) {
   const error = book.extractionError || book.mapError || page?.error;
-  const title = error ? '這一步需要再試一次' : !connected ? '連接老師，開始講解' : book.extraction !== 'done' ? '正在整理教材頁面' : !book.map ? '先讀懂整份教材的脈絡' : paused ? '講解生成已暫停' : '這一頁正在等待講解';
-  const body = error || (!connected ? '你可以先自由翻閱 PDF。登入後，老師會建立全書脈絡，再逐頁準備講稿。' : book.extraction !== 'done' ? `已整理 ${book.extracted} / ${book.count || '…'} 頁。圖表與公式會一起保留。` : !book.map ? `已分析 ${book.mapChunks.flat().length} / ${book.count} 頁。首次需要一些時間，完成的脈絡與講解會保存。` : '目前頁面會優先處理。你可以繼續翻閱，完成後回來閱讀。');
+  const title = error ? '這一步需要再試一次' : !connected ? '連接老師，開始講解' : book.extraction !== 'done' ? '正在整理教材頁面' : !book.map ? '先準備你正在看的頁面' : paused ? '講解生成已暫停' : '這一頁正在等待講解';
+  const body = error || (!connected ? '你可以先自由翻閱 PDF。登入後，老師會優先準備目前頁面，其餘分析在背景繼續。' : book.extraction !== 'done' ? `已整理 ${book.extracted} / ${book.count || '…'} 頁。圖表與公式會一起保留。` : !book.map ? `已分析 ${book.mapChunks.flat().length} / ${book.count} 頁。每批完成即可先讀，不必等待整份教材。` : '目前頁面會優先處理。你可以繼續翻閱，完成後回來閱讀。');
   return <div className="preparation"><div className="preparation-icon"><BookOpen size={28}/></div><h3>{title}</h3><p>{body}</p>{error ? <button className="secondary-button" onClick={retry}><RefreshCw size={15}/>重試</button> : !connected ? <button className="secondary-button" onClick={login}>連接 ChatGPT <ArrowRight size={15}/></button> : <div className="skeleton"><i/><i/><i/></div>}</div>;
 }
 function MapContent({book,navigate}: {book: Book; navigate: (n: number) => void}) {
-  if (!book.map) return <div className="preparation"><BookOpen size={28}/><h3>全書脈絡準備中</h3><p>完成後，這裡會顯示教材總覽、術語與每頁主題。</p></div>;
+  if (!book.map) return <div className="preparation"><BookOpen size={28}/><h3>教材脈絡逐步準備中</h3><p>每一批分析完成就會出現在這裡，已完成的頁面可先閱讀與提問。</p></div>;
   return <><span className="eyebrow">THE BIG PICTURE</span><h2 className="map-title">先看全貌，再理解細節。</h2><Markdown text={book.map.overview} navigate={navigate}/><h3>逐頁導覽</h3><div className="map-pages">{book.map.pages.map(p => <button key={p.page} onClick={() => navigate(p.page)}><span>{String(p.page).padStart(2,'0')}</span><div><strong>{p.topic}</strong><small>{p.summary}</small></div><ChevronRight size={15}/></button>)}</div></>;
 }
