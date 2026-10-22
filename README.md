@@ -1,107 +1,145 @@
-# study-project
+# Study Project
 
-個人 AI 讀書導師：在同一視窗自由閱讀 PDF，對照逐頁文字講解並隨時追問。全書脈絡、背景生成與本機保存，讓閱讀能接續進行。
+**把 PDF 教材與 AI 導師放在同一個閱讀工作區。**
 
-目前版本為 Windows x64 桌面 Alpha（0.7.1）。閱讀與本機保存已完成實作及測試；OAuth 登入入口、教材脈絡與模型生成流程已串接，真實帳號授權後的完整教學品質仍待驗證。
+[![Windows Release](https://github.com/Jay-Huang-0130/study-project/actions/workflows/release.yml/badge.svg)](https://github.com/Jay-Huang-0130/study-project/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/Jay-Huang-0130/study-project)](https://github.com/Jay-Huang-0130/study-project/releases/latest)
+![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-blue)
+![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)
 
-## 給朋友下載（建議安裝版）
+[下載安裝版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Setup.exe) · [功能與使用](#功能) · [本機開發](#本機開發) · [技術文件](docs/README.md) · [Engine 設計論文](docs/ENGINE.md) · [回報問題](https://github.com/Jay-Huang-0130/study-project/issues)
 
-[下載 Windows 安裝版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Setup.exe)，安裝一次後從桌面或開始功能表開啟 **Study Project**，不必每次重跑安裝檔，也不必安裝 Node.js 或 Git。每位使用者登入自己的 ChatGPT 帳號，使用自己的額度與教材。
+Study Project 是以個人自學為目標的桌面工具。左側自由翻閱 PDF，右側閱讀對應頁面的繁體中文講稿、追問與練習；已完成內容保存在本機，回到同一頁即可接著讀。
 
-安裝版每次啟動會檢查更新，發現新版後背景下載。右上角會顯示進度／新版已備妥，設定內可手動檢查與按「重新啟動並更新」。按下後先停止生成、保存資料，再安裝並重開；生成仍等你手動繼續。一般關閉 App 不會自動安裝。斷網或下載失敗可在設定重試，不影響閱讀。
+目前版本 **0.7.1 / Windows x64 Alpha**。這是公開原始碼的個人專案；其他作業系統尚未驗證，授權條款待作者決定。
 
-程式目前尚未簽章，安裝與更新仍可能顯示 Windows 未知發行者或 SmartScreen 警告。自動更新不是程式簽章。
+## 功能
 
-教材資料預設在 `%APPDATA%/study-project/library`，不放進程式安裝目錄；更新或解除安裝不主動刪除這些資料。設定可開啟資料資料夾。
+- **對頁閱讀**：PDF 與講解左右分割，支援縮放、頁碼跳轉及引用頁面連結。
+- **逐步可讀**：局部索引完成即可生成對應講稿，不必等整份教材分析完。
+- **自由控制**：開啟 App、選教材或翻頁都不會自動開始 AI 生成；由使用者按開始／繼續。
+- **並行處理**：AI 請求預設 4、可調 1–6；PDF 背景工作緒預設 2、可調 1–4。講稿完成一頁就補位。
+- **頁面問答與練習**：紀錄依教材與頁碼保存；可選最多 10 頁、5 題練習，先作答再看解析。
+- **本機快取**：以檔案內容辨識教材，保存 PDF 副本、講稿、問答與進度；可刪除單筆問答或整份教材。
+- **可調閱讀介面**：浮動書庫、兩組獨立字級、可展開與搜尋的教材目錄。
+- **安裝版更新**：自動檢查、背景下載，使用者按「重新啟動並更新」才安裝。
 
-舊版可攜 EXE 不會自行轉成安裝版，需先下載安裝一次。若先前使用 `StudyProjectData`：關閉舊版，將該資料夾內的 `books`、`settings.json` 完整複製到安裝版的資料資料夾（搬移前先備份，避免覆蓋不同教材）。這台電腦原本使用預設 AppData 書庫的捷徑可直接沿用。
+模型連線使用隨程式打包的官方 Codex app-server，透過 ChatGPT OAuth 登入。每位使用者使用自己的帳號與可用額度；模型清單能載入，不代表帳號一定有使用資格或剩餘額度。
 
-[可攜版](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Windows.exe)仍可使用，但不支援自動更新。Releases 的 Source code ZIP 是開發原始碼，並非桌面程式。
+## 安裝
 
-## 直接使用
+| 版本 | 下載 | 使用方式 | App 內更新 |
+| --- | --- | --- | --- |
+| 安裝版（建議） | [Study-Project-Setup.exe](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Setup.exe) | 安裝一次，之後點桌面或開始功能表捷徑 | 支援 |
+| 可攜版 | [Study-Project-Windows.exe](https://github.com/Jay-Huang-0130/study-project/releases/latest/download/Study-Project-Windows.exe) | 放入可寫入的資料夾後執行 | 手動下載替換 |
 
-1. 雙擊桌面的 **Study Project** 捷徑，或專案內的 `Start-Study.cmd`。入口優先使用已安裝的程式，再回退到 `release/app-0.7.1/Study Project.exe`；也可單獨執行 `release/Study-Project-0.7.1-Windows.exe`。
-2. 開啟右上角設定，按「使用 ChatGPT 登入」，在系統瀏覽器完成登入後回到程式。
-3. 左下角圓形書庫按鈕可展開教材清單；選擇後自動收起。書庫浮在閱讀畫面上，不占 PDF 與講解寬度。匯入 PDF。可先翻閱本機預覽；按右下角「開始生成／繼續生成」後，才會送出教材 AI 請求。
-4. 使用底部頁碼或左右方向鍵翻頁，在右側提問；已完成的講稿與問答會自動保存。
-5. 講稿完成後可選擇練習範圍（最多 10 頁、5 題），並在問答區提交答案。
+使用者不需要安裝 Node.js 或 Git。Releases 的 **Source code** 壓縮檔是原始碼，不是桌面程式。[所有版本與校驗檔](https://github.com/Jay-Huang-0130/study-project/releases)。
 
-單獨使用可攜執行檔時，教材資料預設放在旁邊的 `StudyProjectData/`。桌面捷徑可沿用原本的資料目錄，位置記錄在 `release/data-location.txt`；可從設定開啟實際資料夾。搬移前先關閉程式，將執行檔與資料夾一起帶走。登入授權由本機系統憑證儲存管理，新電腦需要重新登入。
+> 目前產物尚未簽章，Windows 可能顯示未知發行者或 SmartScreen 提示。自動更新不等於程式簽章。
 
-設定會顯示實際程式版本。可調整 AI 同時請求數（1～6，預設 4）、PDF 工作緒（1～4，預設 2），並查看執行中與排隊的工作。講解預設精簡，也可選標準或詳細；簡單頁不硬套固定章節，必要推導才展開。舊講稿不會自動重跑，可逐頁選「以目前設定重新講解」。
+## 快速開始
 
-整份教材可在左下角書庫展開後，按該份教材右側「刪除」。確認後會移除書庫中的 PDF 副本、講稿、問答、練習與進度；不會刪除原本匯入位置的 PDF。
+1. 開啟 Study Project，在設定中使用自己的 ChatGPT 帳號登入。
+2. 點左下角書庫按鈕，匯入 PDF；可以先翻閱原文。
+3. 按右下角「開始生成」。每頁講稿完成就可閱讀，其他頁在背景繼續。
+4. 自己翻頁、追問，或選擇練習範圍。切換教材不會停止已由你啟動的背景工作。
+5. 需要時按「暫停生成」。斷線、用量限制或生成錯誤也會暫停；排除原因後按繼續，補做未完成部分。
 
-每筆問答（含練習）右側有刪除按鈕，一次刪除該筆問題與回答，本機保存及後續問答脈絡會同步移除。正在回答的紀錄須等完成後刪除。
+每次重新開啟程式，未完成教材都先待命；已保存內容仍可閱讀。繼續會重新產生中斷中的頁面／批次，並非從遠端模型中斷的同一個 token 續接。
 
-每次開啟 App 都先待命，不會自動生成或恢復任何教材。切換教材、改設定也不會啟動生成；匯入新 PDF 僅準備本機預覽。
+### 字級與目錄
 
-右下角「開始生成／暫停生成／繼續生成」只控制目前教材。暫停會中斷該教材的 AI 請求、排隊工作及 PDF 背景解析；已完成內容保留。斷線、額度限制或生成錯誤會自動暫停並顯示原因，排除問題後按一次繼續，補做未完成頁面與中斷問答。中斷中的頁面會重新生成，不把半段回答當成完成。
+設定提供「固定介面／標題」80–150% 與「閱讀內文」12–26 px，互相獨立並自動保存。PDF 有自己的縮放控制。
 
-切換教材後，原教材可繼續背景生成；各教材共享設定中的 AI 總並行上限。浮動書庫會顯示背景生成中、已暫停、已完成或等待連線，也可直接控制其他教材。頂部只顯示講解已備妥頁數，正文直接顯示講稿；參考覆蓋範圍保存在資料中並可由頁碼提示查看。
+教材脈絡優先沿用 PDF 內建章節；沒有書籤時每 8 頁分組。展開後顯示頁面主題與短摘要，可搜尋並跳頁。這個目錄不會額外呼叫模型，也不會為沒有書籤的教材猜測章節。
 
-講稿保留建立時參考的頁數，正文不重複顯示導讀與保存說明。完整脈絡完成後，可自行選擇更新早期講解，既有內容不會被背景工作自動覆寫。
+### 更新與資料搬移
 
-如需重新建立捷徑，在專案根目錄執行：
+安裝版啟動後會檢查更新，完成背景下載後可在設定按「重新啟動並更新」。一般關閉不會自動安裝。更新前保存紀錄並停止生成，重開後仍等你手動繼續。
 
-```powershell
-powershell -NoProfile -File scripts/create-desktop-shortcut.ps1
+| 內容 | 預設位置 |
+| --- | --- |
+| 安裝版教材與學習紀錄 | `%APPDATA%/study-project/library` |
+| 可攜版教材與學習紀錄 | EXE 旁的 `StudyProjectData/` |
+| 實際使用的資料夾 | 設定 → 開啟資料資料夾 |
+
+教材存於本機，**生成時所需的文字、頁面圖像與相關問答仍會送往模型服務**；不是完全離線的 AI。已保存講稿與原 PDF 可離線閱讀。教材檔案不是加密保險箱，請自行備份。
+
+舊可攜版需先下載安裝版一次，才能取得後續 App 內更新。搬移前關閉程式並備份兩邊資料；將舊資料夾中的 `books/` 與 `settings.json` 複製到新位置，避免覆蓋不同書庫。跨電腦需重新登入。詳細位置規則見 [架構文件](docs/ARCHITECTURE.md#資料保存與位置)。
+
+## 如何運作
+
+```mermaid
+flowchart LR
+    PDF[匯入 PDF] --> Local[本機文字與圖像解析]
+    Start[手動開始生成] --> Engine[Engine 排程]
+    Local --> Index[分段建立逐頁索引]
+    Engine --> Index
+    Index --> Lesson[已就緒頁面並行生成講稿]
+    Index --> Map[完整索引後整合全書脈絡]
+    Lesson --> Store[本機保存並立即顯示]
+    Map --> Context[後續請求使用完整脈絡]
+    QA[提問與練習] --> Engine
 ```
+
+索引是小批次任務；講稿則以單頁為任務，釋出容量便補位，不等待同一輪所有頁面完成。早期講稿會保存建立時的脈絡覆蓋範圍，完整地圖完成後不會偷偷覆寫舊講稿。演算法、偽程式碼與限制見 [Engine 設計文件](docs/ENGINE.md)。
 
 ## 本機開發
 
-需要 Windows x64、Node.js 22.13 以上與 npm。原始碼使用 Electron、React、TypeScript、PDF.js 與官方 Codex 套件。
+需要 **Windows x64、Node.js 22.13+、npm**。
 
 ```powershell
+git clone https://github.com/Jay-Huang-0130/study-project.git
+cd study-project
 npm ci
+
+# 使用隔離的開發資料，避免碰到日常書庫。
+$env:STUDY_USER_DATA = Join-Path (Get-Location) 'local-data/dev-profile'
+$env:STUDY_DATA_DIR = Join-Path (Get-Location) 'local-data/dev-library'
 npm run dev
 ```
 
-檢查、建置與打包：
+| 指令 | 用途 |
+| --- | --- |
+| `npm test` | 核心邏輯、Provider 協定、PDF Worker、閱讀資料與更新測試 |
+| `npm run check` | 自動測試、TypeScript 型別檢查與 Vite 正式編譯 |
+| `npm run check:codex` | 隔離設定下檢查 app-server 初始化與模型目錄，不發送推論 |
+| `npm run build` | 編譯 renderer、main 與 preload |
+| `npm start` | 執行已編譯的 Electron App |
+| `npm run package` | 編譯並建立 Windows 安裝版與可攜版 |
 
-```powershell
-npm run check
-npm run check:codex
-npm run build
-npm start
-npm run package
-```
+如果 Electron 執行檔未安裝完整，可執行 `node node_modules/electron/install.js`。開發程序、資料隔離與回歸要求見 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
-`check:codex` 使用隔離暫存設定驗證啟動與模型清單，不讀取既有帳號憑證，也不發送推論請求。模型清單能載入不代表帳號已取得模型使用權限。
+## 技術堆疊
 
-若 npm 安裝後缺少 Electron 執行檔，可執行 `node node_modules/electron/install.js` 重新完成官方執行環境安裝。
+| 層級 | 元件 |
+| --- | --- |
+| 桌面與介面 | Electron、React、TypeScript、Vite |
+| PDF | PDF.js、Node Worker Threads、`@napi-rs/canvas` |
+| 文字與數學 | React Markdown、GFM、KaTeX |
+| 模型橋接 | `@openai/codex` app-server、ChatGPT OAuth |
+| 保存 | 每份教材 JSON 原子快照與檔案資產，尚未採用 SQLite |
+| 發行與更新 | electron-builder、NSIS、electron-updater、GitHub Actions / Releases |
 
-開發模式資料預設位於 Windows 應用程式資料目錄的 `study-project/library`；正式產品名稱下的資料目錄可在設定中直接開啟。`STUDY_DATA_DIR` 與 `STUDY_USER_DATA` 可用來指定隔離測試位置，請使用絕對路徑。
+## 文件
 
-## 專案文件
+| 文件 | 內容 |
+| --- | --- |
+| [文件導覽](docs/README.md) | 依使用者、開發者與研究閱讀順序整理 |
+| [產品規格](SPEC.md) | 0.7.1 行為、範圍與驗收條件 |
+| [架構](docs/ARCHITECTURE.md) | 程序、資料、IPC、安全與預覽生命週期 |
+| [Engine 設計論文](docs/ENGINE.md) | 問題定義、形式化模型、演算法、驗證與限制 |
+| [效能分析](docs/PERFORMANCE.md) | 動態補位、PDF 工作緒、歷史量測與實驗設計 |
+| [驗證紀錄](docs/TESTING.md) | 自動測試、桌面驗證與未驗證項目 |
+| [發行流程](docs/RELEASING.md) | tag、CI、更新附件與版本發布 |
+| [開發紀錄](DEVLOG.md) | 歷史決策、修補與進度 |
 
-- [產品規格書](SPEC.md)：MVP 範圍、功能、資料、生成流程與驗收條件。
-- [開發流程](DEVELOPMENT.md)：開發階段、日常工作方式與驗證要求。
-- [開發紀錄](DEVLOG.md)：目前進度、完成事項、決策、問題與下一步。
-- [架構與限制](docs/ARCHITECTURE.md)：程序分工、資料保存與本版限制。
-- [驗證紀錄](docs/TESTING.md)：已通過與尚未驗證的項目。
-- [效能改善](docs/PERFORMANCE.md)：漸進處理、實測與後續優化方向。
+## 參與與回報
 
-## 核心體驗
+歡迎透過 [Issues](https://github.com/Jay-Huang-0130/study-project/issues) 回報問題，或依 [貢獻指南](CONTRIBUTING.md) 提出修改。請附 App 版本、重現步驟、預期與實際結果，移除私人教材內容和登入資訊。
 
-1. 選擇教材 PDF，左右分割顯示原頁與文字講稿。
-2. 自己翻頁，AI 講解與問答紀錄依頁切換。
-3. 優先處理目前頁面與問題，其餘講稿於背景生成。
-4. 已完成內容本機保存，重新開啟不重跑模型。
-5. 依指定範圍練習並取得解析。
+目前沒有雲端書庫同步、跨平台交付、OCR 專用管線或自動符號驗算器；模型教學品質仍需對照原頁。自動測試數量與本機 PDF 渲染速度，不代表模型答案正確率。
 
-模型使用官方 Codex app-server 的 ChatGPT OAuth 流程；不使用 API Key 替代登入。初版使用 Windows x64 可攜打包，其他平台尚未驗證。
+## 授權
 
-## 從哪裡開始
-
-先閱讀 SPEC.md，再查看 DEVLOG.md 的「目前進度」與「下一步」。每次工作完成後更新紀錄，避免只靠聊天記住進度。
-
-## 字級與教材目錄
-
-設定中的「固定介面／標題」可調 80–150%，「閱讀內文」可調 12–26 px，兩組互相獨立並自動保存。PDF 縮放仍由左側控制。
-
-教材脈絡改為可展開目錄：優先顯示 PDF 內建章節與小節，再展開頁面與一句摘要；沒有內建目錄時，每 8 頁一組，依已有索引顯示主題，不猜測章節。摘要最多 64 字，完整講解由點選頁面閱讀；可搜尋主題、摘要、頁碼。未分析頁仍可跳轉閱讀 PDF，開啟目錄不會呼叫模型。
-
-## 發行自動化
-
-詳見 [發行流程](docs/RELEASING.md)。推送符合 package.json 的 `vX.Y.Z` 標籤後，GitHub Actions 會測試、建置 Windows 安裝版與可攜版並發布到 Releases，包含 latest.yml、差分更新 blockmap 與 SHA256 校驗檔。只有成功建置才會發布；不需個人權杖或上傳本機教材、登入資料。
+目前倉庫未提供 `LICENSE`，授權條款待作者決定；本 README 不宣告 MIT、Apache 或其他尚未選定的授權。

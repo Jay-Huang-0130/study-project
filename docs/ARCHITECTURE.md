@@ -1,116 +1,133 @@
-# 0.5.1 架構與限制
+# 系統架構與實作邊界
 
-## 程序分工
+基準：**0.7.1**；更新日期：**2026-10-22**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
-```text
-React 閱讀介面
-  ├─ PDF.js：目前頁面、縮放、左右翻頁
-  ├─ Markdown + KaTeX：講稿、公式、問答
-  └─ 限定 IPC API
-       └─ Electron 主程序
-            ├─ Store：教材識別、原子保存、恢復中斷狀態
-            ├─ PDF Worker 池：全文文字擷取、多工作緒圖像渲染
-            ├─ Engine：全書地圖、優先排程、逐頁教學、練習
-            └─ 官方 Codex app-server：OAuth、模型清單、文字與圖像請求
+## 程序與模組
+
+```mermaid
+flowchart TB
+    UI[React Renderer] --> API[contextBridge / preload]
+    UI --> View[PDF.js 預覽 Worker]
+    API --> Main[Electron Main：驗證 IPC]
+    Main --> Store[Store：教材與設定]
+    Main --> Engine[Engine：教材工作與上下文]
+    Main --> PDF[每份教材的 PDFLoader]
+    PDF --> Workers[Node PDF Worker Threads]
+    Engine --> Pool[共用 PriorityPool]
+    Pool --> Codex[Codex app-server 子程序]
+    Codex --> Remote[模型服務]
+    Main --> Updates[Updates / electron-updater]
+    Updates --> Releases[GitHub Releases]
 ```
 
-渲染程序不具有 Node.js 權限。主程序驗證 IPC 來源；PDF 與頁面圖像僅能經由限定文件識別及檔名的 `study:` 路由取得。講稿不執行原始 HTML，外部連結不直接開啟。
+| 模組 | 職責 | 不負責 |
+| --- | --- | --- |
+| [App.tsx](../src/App.tsx) | 閱讀狀態、講稿、問答、設定、書庫、串流呈現 | 直接讀寫 Node 檔案或保管 token |
+| [PDFViewer](../src/PDFViewer.tsx) | 從原 PDF 繪製目前頁、縮放、書籤與重載 | 建立送模型的 JPEG |
+| [main](../electron/main.ts) / [preload](../electron/preload.ts) | IPC 驗證、匯入、原頁路由、程序協調與退出 | 模型語義驗算 |
+| [Store](../electron/store.ts) | SHA-256 身分、JSON 快照、刪除與啟動恢復 | 跨程序交易或雲端同步 |
+| [PDFLoader](../electron/pdf-loader.ts) | 共享頁面派工、每份教材的 Worker 數量 | 模型並行容量 |
+| [Engine](../electron/engine.ts) | 索引、講稿、互動、暫停、上下文建構 | PDF canvas 顯示與更新下載 |
+| [PriorityPool](../electron/priority-pool.ts) | 實際 Provider 呼叫的共用容量與佇列優先級 | 搶占已開始的遠端請求 |
+| [CodexClient](../electron/codex.ts) | OAuth app-server、模型清單、RPC、串流及中斷 | 共享永久模型對話記憶 |
+| [Updates](../electron/updates.ts) | 檢查、背景下載、明確安裝動作與錯誤狀態 | Windows 程式簽章 |
 
-Codex 使用獨立設定目錄及系統 keyring。教師禁用預設工具、shell、應用連接器、多代理與 hooks，不以教材指令控制本機操作。程序間不向介面轉送原始 stderr 或 token。
+Renderer 啟用 context isolation、停用 Node integration 並使用 sandbox。IPC 僅接受應用主視窗的 main frame。`study://book/<sha256>/source.pdf` 與 `pN.jpg` 路由驗證教材存在、識別格式與檔名，不提供任意檔案瀏覽。
 
-## 背景工作
+## 從匯入到可閱讀
 
-1. 匯入時依 PDF 原始位元組計算 SHA-256，保存教材副本。
-2. 首個 PDF Worker 快速擷取全文後繼續渲染，其他 Worker 各自載入 PDF 與 Canvas。主程序共享工作佇列並預約頁碼，避免重複寫圖；預設 2 緒，上限 4，動態縮減會等待當前工作完成。每次領取新工作時依目前閱讀頁重新排序，已有圖像不重畫。
-3. 首批最多 2 頁建立視覺與文字索引，後續最多 6 頁，每批完成即保存並顯示。
-4. 每批索引完成立即開放相應講稿與問答；全書總覽在背景繼續整合。
-5. 所有已啟動且未暫停的教材以輪替方式排程，共用 1～6 個模型請求容量（預設 4）。每份教材各有索引、講稿與問答工作；不讓講稿持續占滿容量而餓死全書整合。使用者問題優先於排隊中的講稿與索引；暫停可取消在途請求及排隊工作。
-6. 講稿請求帶入全文速覽、當時可用的地圖與術語、目前原頁及必要來源。模型須知道覆蓋範圍與未確認資訊，目標原頁永遠優先保留。
-7. 問答、講稿與練習綁定送出時的文件、頁碼與來源快照。地圖增量更新不丟失在途講稿；結果標示來源覆蓋範圍。
+1. Store 依 PDF 位元組計算 SHA-256，複製原檔至書庫；相同內容沿用已有紀錄。
+2. 匯入可啟動本機 PDFLoader 供預覽與資產準備；AI 保持暫停。
+3. 明確開始／繼續後，Engine 才讓教材加入背景生成。全文文字先行，圖像依目前頁、後 9 頁及其他頁順序準備。
+4. 局部索引完成就保存地圖、開放相應講稿；每頁講稿完成立即保存，不等待全書總覽。
+5. 同一會話已啟動的多份教材輪替派工；問題、講稿與索引共享模型容量。
+6. 完整索引再整合 overview / terms / links。早期講稿保留建立時覆蓋範圍，未經手動操作不被背景覆寫。
 
-每個講稿請求依保存的頁面資訊量（brief / normal / dense）和精簡、標準、詳細偏好設定軟性篇幅目標；不以硬裁切丟棄必要定義與推導。模型遵循程度仍須實際驗收。舊索引沒有資訊量時，以原頁文字與摘要長度作備援。
+單純啟動 App、選教材、翻頁、登入或改設定不啟動教材 AI 生成。明確送問題、出題或重新講解也是模型操作，與背景自動開始不同。
 
-設定頁以 `app.getVersion()` 顯示執行版本，並顯示模型執行、排隊、講稿和 PDF Worker 數量。
-
-生成失敗立即暫停受影響教材，保存原因，不持續發出重試。傳輸層斷線時暫停仍有未完成工作的教材。連線恢復或額度可用後，由使用者按該教材的繼續按鈕重做未完成工作。
-
-## 保存設計
+## 資料保存與位置
 
 ```text
-StudyProjectData/
-  settings.json
-  books/<教材 SHA-256>/
-    source.pdf
-    book.json
-    p1.jpg
-    p2.jpg
-    ...
+<library>/
+├── settings.json
+└── books/<PDF SHA-256>/
+    ├── source.pdf
+    ├── book.json
+    ├── p1.jpg
+    └── p2.jpg ...
+
+<userData>/
+├── data-location.json   # 自訂書庫位置，便於安裝更新後重啟
+├── oauth/              # 獨立 Codex 設定，憑證使用系統 keyring
+└── tutor-runtime/      # app-server 工作目錄
 ```
 
-首版以每份教材的 JSON 快照搭配檔案資產保存，先寫入並 flush 暫存檔，再以 rename 替換正式資料。與 SPEC.md 的建議 SQLite 不同，此選擇減少首版原生資料庫重建與打包依賴；資料仍透過 Store 層集中管理，後續可遷移。
+資料根目錄選擇順序為：
 
-已完成講稿直接讀取保存內容，不依賴 OpenAI Prompt Caching。重開程式時，未完成講稿恢復等待狀態；中斷問答標記為失敗，避免將部分答案當成完整答案。
+1. `STUDY_DATA_DIR`。
+2. 完整路徑參數 `--study-data-dir=`。
+3. 可攜模式的 EXE 相鄰 `StudyProjectData/`。
+4. 非可攜模式已保存的 `userData/data-location.json`。
+5. `userData/library`；一般 Windows 安裝版為 `%APPDATA%/study-project/library`。
 
-## 本版限制
+`STUDY_USER_DATA` 可隔離整份應用設定；不要讓不同 profile 的程序共寫同一 library。單一實例鎖不能代替跨書庫的多程序資料庫鎖。
 
-- 真實 OAuth 授權、圖像推論與完整教學流程須由使用者登入後驗證；目前已驗證的是官方元件初始化、未登入狀態與模型目錄。
-- 模型目錄不是模型使用資格或額度的保證，實際請求仍可能失敗。
-- 不再等待全書分析完成，但每頁仍需原頁圖像與該頁索引。首份講稿仍有模型回應時間，不保證固定秒數。
-- 長教材索引的上下文長度尚待實測。頁面圖像寬度最多約 1600 像素；極小公式或特殊字型可能需要後續調整。
-- 本版沒有自動符號計算驗證器，不保證模型的數學推導正確；需要人工對照驗收。
-- 只支援頁面級同步，尚無精確區域框選或逐段高亮。
-- 練習以文字問答呈現，範圍上限 10 頁、題數上限 5 題，紀錄保存於起始頁。尚無獨立成績報表。
-- 問答提供最近 8 組已完成對話；完整歷史保留在本機，但不全部反覆送入模型。
-- 背景模型工作可跨教材持續，總請求上限共用。每份教材保存獨立暫停狀態，切換閱讀不改變原有生成狀態。
-- 已完成講稿切換模型後不自動重新生成。早期講稿可在全書整合後手動更新；尚無完整地圖編輯介面。
-- 同一應用設定目錄以單一實例鎖防止重複啟動；不可讓不同設定目錄的多個程序共用同一教材資料夾。
-- Windows x64 同機打包測試已執行；另一台實體電腦、Windows ARM 與其他系統尚未驗證。
-- Windows 產物尚未簽署。應以專案提供的來源及檔案雜湊核對產物。
+`book.json` 包含頁面文字、講稿、索引、訊息與閱讀位置。保存以 flush 暫存檔再 rename 替換；尚未使用 SQLite。沒有跨 PDF、JPEG、JSON 的完整交易，也沒有預設教材加密或遠端備份。
 
-## 啟動與資料位置
+### 啟動恢復與快取
 
-桌面捷徑直接啟動 `release/app-0.5.1/Study Project.exe`，用 `--study-data-dir=` 沿用既有教材目錄，避免單檔每次解壓與書庫位置改變。專案內 `Start-Study.cmd` 為備用入口，資料位置指標位於未提交的 release/data-location.txt。
+- 清除前次 `generationStarted`；未完成教材先暫停，等待手動開始。
+- 中斷的 running 索引、講稿、問答與解析恢復 pending；不將半段文字當 done。
+- 已完成內容保留，改模型或講解長度只套用新工作。
+- 讀取到損毀 JSON 會明確報錯，不靜默覆寫。
 
-## 逐筆刪除問答
+### 刪除
 
-透過限定來源 IPC，Store 驗證書本、頁碼和訊息 ID；禁止刪除 pending/running 紀錄。先原子保存移除後的書本快照，再更新記憶體中的訊息陣列。後續問答只讀取仍存在的紀錄，已刪除的練習不再作為後續題目範圍。
+整份教材需確認後才刪除。主程序先取消模型工作、清除延遲寫入並等待 PDF Worker 停止，再移除經驗證的 `books/<sha256>` 目錄。原匯入位置的 PDF 不受影響。
 
-## 浮動書庫與教材刪除
+單筆問答先原子保存移除後快照，再更新記憶體；running 訊息不能刪除，pending 可刪除。後續上下文只取仍存在的紀錄。Store 與 Engine 均核對書本物件身分，防止刪除後的晚到工作重建資料。
 
-書庫以固定定位浮層與左下角圓鈕呈現，不參與閱讀區寬度計算。預設收起，選教材後自動收起；點外側或 Escape 也能收起。
+## 模型橋接與資料流
 
-教材刪除經使用者確認後，主程序先解除作用中教材、清除延遲保存、停止並等待 PDF Worker 終止，再刪除受驗證的 `books/<SHA-256>` 目錄。Store 在保存時核對書本物件身分，Engine 在啟動排隊模型工作與處理回覆時核對同一身分；舊物件的延遲結果不會重新建立資料，重匯入同雜湊的新書也不會被覆蓋。刪除也會取消該教材的模型與排隊工作；延遲回覆不再保存。
+每次 Provider 請求建立 ephemeral thread，明確帶入文字、必要原頁圖像和上下文；不依賴其他獨立請求的隱含記憶。問答最多帶最近 8 筆完成紀錄。一般來源原頁上限 6 頁，帶練習範圍者最多 12 頁。
 
-## 教材級中斷與續作
+程式啟動獨立 `CODEX_HOME`，設定系統 keyring，清除子程序中的 API Key 環境變數。停用工具、shell、web search、apps、hooks、多代理；收到工具 RPC 會拒絕。原始 stderr 不直接送至介面。
 
-每份 Book 保存 `generationStarted`、`generationPaused`、`pauseReason`。0.5.1 每次開啟書庫會清除前次 generationStarted，未完成教材標示等待手動開始／繼續，完整快取仍可閱讀。新工作階段不會因選取、登入或設定更新而自動啟動；本次經使用者啟動的教材才加入背景輪替。
+本機保存不代表推論完全離線：生成所需教材文字、圖像及問答會交給模型服務。教材內容與模型補充須區分；schema 驗證僅保證結構，不是事實驗證。圖像讀取不清、跨頁來源不足及提示注入仍可能影響回答。
 
-每項工作有獨立 AbortController。暫停取消排隊項目、向在途 Provider 發出 abort，並將未完成講稿和問答恢復為 pending；已完成快取不變。Codex Provider 依 [官方 App Server 中斷協定](https://learn.chatgpt.com/docs/app-server#interrupt-a-turn) 送出對應 threadId 與 turnId 的 `turn/interrupt`。若暫停發生在 turn/start 回覆之前，待取得 turnId 後補送中斷，再解除訂閱。取消後忽略所有延遲串流與結果；中斷問答續作時使用新的 generationId，避免舊串流混入。
+## 預覽與背景解析分離
 
-取消指令需要傳到伺服器，不能承諾遠端在零延遲內停止或退還已用額度；本機立即停止接受該工作進度。PDF Worker 停止後將解析標記 pending，繼續時利用已有圖像重新載入缺少部分。
+PDF.js renderer 直接讀 `source.pdf`，Node Workers 另產生模型使用的 JPEG；二者不共用 PDFDocumentProxy。
 
-續作會清理舊版 error 狀態並重新排程。中斷問答沿用原紀錄 ID 及練習來源範圍；不建立重複對話。尚未完成的頁／批次重新生成，不宣稱可從遠端模型的同一 token 位置續跑。
+0.7.1 預覽以教材 id 分開掛載，載入狀態包含 id / revision，禁止新工作使用已銷毀的舊文件。繪製先在獨立 canvas 進行，僅有效工作提交可見畫布。取消與過期結果不覆寫新頁。
 
-## 0.5.1 手動啟動與舊版資料修復
+錯誤時 canvas 仍保留，提供「重新載入 PDF」；revision query 避免沿用失敗回應。有效渲染遇到 transport 銷毀最多自動重載一次。此路徑不呼叫模型，也不刪除講稿。
 
-`activeId` 僅決定閱讀位置，不再隱含啟用背景工作。模型排程只接受本次已由 resumeBook 啟動的教材。App 啟動及普通翻頁不啟動 PDF Worker；明確匯入新檔時可做本機預覽，仍不啟動 AI。
+## 閱讀呈現
 
-繼續會恢復舊 map/page error 及未完成問答、移除各層殘留錯誤文字，並檢查被標成 done 的部分地圖是否仍不完整。若排程發現舊 error 卻沒有暫停標記，改為明確暫停而非顯示假生成中。完成判定要求完整地圖、全部頁講稿與問答皆完成。
+字級存於 `uiScale / readingFontSize`，主程序驗證範圍；介面／標題與內文用獨立 CSS variables。PDF 縮放保持獨立。
 
-頁面正文移除導讀和保存說明；覆蓋資訊仍保存在 Page，頁碼提示可查看。頂部只保留已完成講稿數；重新產生入口移至講解工具列圖示。
+教材目錄從已載入 PDF 讀取書籤、解析成實體頁碼，與已有逐頁索引合併；沒有書籤則每 8 頁分組。摘要為既有文字的第一句／最多 64 字，不是額外生成的章節總結。教材目錄只影響呈現；內部 overview / terms 仍供教學上下文使用。
 
-## 0.6.0 閱讀呈現與發行
+## 暫停、串流與通知
 
-字級以 uiScale / readingFontSize 儲存在現有本機 settings.json。主程序獨立驗證範圍，renderer 的 CSS variables 分別套用介面與標題、閱讀內文，PDF canvas 渲染比例維持原設定。舊設定缺少欄位時使用 100% 與 13px。
+每個 Engine job 有 AbortController。暫停取消 Pool 等待項目，向在途 Provider 送出中斷，回復未完成狀態並停止相關 PDFLoader。遠端停止與用量扣抵不具零延遲保證。
 
-PDFViewer 在載入文件後讀取 getOutline，命名 destination 透過 getDestination 與 getPageIndex 轉成實體頁碼。只在當前 renderer session 記憶，不寫入教材、不呼叫 AI。reading-outline.ts 將書籤樹與既有逐頁索引合併，無目錄時回退每 8 頁分組；摘要為已有文字第一句／最多 64 字，並非新生成的章節摘要。畫面不再直接輸出密集 overview；底層 overview 及完整術語仍供原教學流程使用。
+主程序對狀態變更約 60ms 合併通知；文字擷取的保存約 250ms 合併；串流事件約 100ms 合併發往 renderer。模型串流不等於完成快取；最終回答通過結果接受條件才標為 done。
 
-GitHub Actions 在 Windows runner 安裝鎖定依賴並測試打包，使用 repository contents 寫入權限發布 portable EXE 和 SHA256SUMS。固定下載檔名與每個版本 tag 分離；不含個人書庫和登入狀態。
+## 安裝與更新
 
-## 0.7.0 安裝版與 App 內更新
+安裝版為 per-user NSIS。透過安裝目錄的 uninstaller 識別，啟動約 4 秒後查詢公開 GitHub Releases。可攜版與一般 win-unpacked / 開發模式不啟用 App 內更新。
 
-NSIS per-user 安裝版使用 electron-updater，固定公開 GitHub provider，啟動 4 秒後檢查新版本；autoDownload 關閉，收到 available 後由 Updates controller 啟動背景下載並向 renderer 發送狀態。下載進度／錯誤／ready 顯示在設定及右上角提示。autoInstallOnAppQuit=false，不允許 downgrade；使用者明確按下更新後才執行 quitAndInstall(true,true)。開發、win-unpacked 及可攜版不啟用檢查，以安裝目錄內的 NSIS uninstaller 識別安裝版。
+Updates controller 收到新版後開始背景下載，由 electron-updater 依 metadata 驗證檔案；`autoInstallOnAppQuit=false`、不允許降版。使用者按「重新啟動並更新」才先保存、停止工作，再執行 installer 並重開。自訂書庫路徑保存至 userData，避免 installer 重啟丟失 CLI 參數。
 
-更新前暫停本次生成資格、保存 store、清空延遲寫入並等待 PDF workers／模型程序退出，才執行安裝。正常退出共用冪等 stopResources。下載錯誤不停止教學工作；安裝前保存失敗則不執行 installer。custom library 位置存在 userData/data-location.json，避免 installer 重啟時丟失 --study-data-dir 參數；便攜模式仍使用旁邊的 StudyProjectData。沒有新資料庫 schema，不遷移／覆寫原書庫。
+發行包含版本化 Setup EXE、blockmap、latest.yml、固定下載別名與 SHA256SUMS。現版未簽章；下載完整性檢查不等於受信任發行者簽章。完整流程見 [RELEASING.md](RELEASING.md)。
 
-發版同時提供版本化 Setup EXE、其 blockmap、latest.yml（內含 SHA512）以及給使用者的固定名稱 Setup 別名。維持 portable 下載相容。未設定簽章憑證，沒有繞過 Windows 安全檢查；後續簽章可接入 CI。
+## 現階段限制
+
+- 只驗證 Windows x64；另一台實體電腦及其他平台尚需驗收。
+- 沒有獨立語義正確率基準、符號驗算器或 OCR 專用管線。
+- 全書索引與速覽的長度尚無 token 預算器；長文件仍可能超出上游限制。
+- JSON 隨教材、講稿與問答增長，沒有跨程序寫入交易。
+- 問答沒有永久保留容量；先於排隊背景工作不代表能搶占在途請求。
+- 語音、雲端同步、區域框選高亮、成績報表尚未實作。
