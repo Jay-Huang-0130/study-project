@@ -105,3 +105,5 @@
 - 隔離 Electron + PDF fixture：兩份教材交替 35 次、期間縮放，舊 0.7.0 真正重現 Transport destroyed，修正版相同流程沒有 PDF 或 renderer 錯誤。
 - 錯誤恢復測試使用未曾載入的第三份 fixture，先以無效 PDF 引發載入錯誤，確認 canvas 仍存在；還原檔案後按「重新載入 PDF」，預覽成功恢復。
 - 模擬暫時錯誤時必須避免重用已快取來源，否則會測不到錯誤；reload revision query 可避開失敗回應快取。所有測試使用獨立書庫／profile，不讀寫真實教材。
+
+- 最終 win-unpacked 0.7.1 回歸測試同樣通過，公開 CI run 39736149890 成功，latest.yml 版本及安裝檔指向 0.7.1。
