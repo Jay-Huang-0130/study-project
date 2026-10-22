@@ -98,3 +98,10 @@
 - 製品成功產生 Setup EXE、blockmap、latest.yml 與 portable EXE。此階段未簽章，Windows 信譽提示仍可能出現。
 
 - 公開 CI run 39614854549 成功；真正安裝的 0.7.0 程式連線 GitHub Releases feed 回報 current，空書庫及 0 次 AI 推論。正式安裝目錄 app.asar SHA256 與本機已驗證包一致。
+
+## 0.7.1 PDF 預覽回歸驗證
+
+- 48 項測試、型別與 Vite 編譯成功。
+- 隔離 Electron + PDF fixture：兩份教材交替 35 次、期間縮放，舊 0.7.0 真正重現 Transport destroyed，修正版相同流程沒有 PDF 或 renderer 錯誤。
+- 錯誤恢復測試使用未曾載入的第三份 fixture，先以無效 PDF 引發載入錯誤，確認 canvas 仍存在；還原檔案後按「重新載入 PDF」，預覽成功恢復。
+- 模擬暫時錯誤時必須避免重用已快取來源，否則會測不到錯誤；reload revision query 可避開失敗回應快取。所有測試使用獨立書庫／profile，不讀寫真實教材。

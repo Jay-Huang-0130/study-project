@@ -1,6 +1,6 @@
 {
   "name": "study-project",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "個人 PDF 讀書導師",
   "type": "module",

@@ -124,7 +124,7 @@ export function App() {
         <div className="session-bar"><div><span className="eyebrow">READ AT YOUR OWN PACE</span><h1>{book.name.replace(/\.pdf$/i,'')}</h1></div><div className="session-progress"><span><b>{complete}</b> / {book.count || '—'} 頁講解已備妥</span><div className="progress-track"><i style={{width:`${book.count ? complete/book.count*100 : 0}%`}}/></div></div></div>
         <div className="split-view" style={{gridTemplateColumns:`minmax(0, ${ratio}fr) 9px minmax(0, ${100-ratio}fr)`}}>
           <section className="pdf-panel"><div className="panel-toolbar"><span className="panel-label"><FileText size={16}/>教材原文</span><div className="zoom-control"><button onClick={() => setZoom(z => Math.max(.5,z-.1))} aria-label="縮小">−</button><span>{Math.round(zoom*100)}%</span><button onClick={() => setZoom(z => Math.min(2,z+.1))} aria-label="放大">＋</button></div></div>
-            <PDFViewer id={book.id} page={n} zoom={zoom} onOutline={onOutline}/>
+            <PDFViewer key={book.id} id={book.id} page={n} zoom={zoom} onOutline={onOutline}/>
             <div className="page-navigation"><button disabled={n<=1} onClick={() => navigate(n-1)} aria-label="上一頁"><ChevronLeft size={18}/></button><span>第 <input key={`${book.id}:${n}`} aria-label="頁碼" defaultValue={n} inputMode="numeric" onBlur={e => navigate(Number(e.target.value))} onKeyDown={e => { if (e.key === 'Enter') { navigate(Number(e.currentTarget.value)); e.currentTarget.blur(); } }}/> / {book.count || '…'} 頁</span><button disabled={n>=book.count} onClick={() => navigate(n+1)} aria-label="下一頁"><ChevronRight size={18}/></button></div>
           </section>
           <div className="divider" onPointerDown={dragDivider} title="拖曳調整兩側寬度"><i/></div>
