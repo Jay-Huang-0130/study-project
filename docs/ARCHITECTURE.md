@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.9.3**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.9.4**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -160,3 +160,7 @@ Reviews 在整合前隔離各子圖局部 ID，收回輸出後先去除完全相
 一般 RPC 保持 60 秒；generate 使用獨立 8 分鐘生命週期，turn/start 回覆等待最多 8 分鐘加 30 秒的晚到 ID 清理寬限。turn/started 已帶有效 ID 時可視為啟動接受，取消對應 RPC 的本機等待並繼續接收內容；完成事件也清除尚未回覆的啟動 RPC。取消或期限到達後禁止輸出回寫，若 ID 晚到則精確 interrupt 後 unsubscribe。沒有 ID 時不送空字串，也不把 unsubscribe 當取消。連線錯誤與 RPC 錯誤統一清理計時器和監聽。單次失敗不自動重送，Engine 依既有機制暫停該教材並保留成功頁面。
 
 0.9.3：PDFLoader.assign 依頁碼派工，orderedPages 只做數值升序；nextIndexPages 跳過快取索引並在第一個未就緒圖像處停止收集，nextPage 等待最前 pending 頁的圖像與索引。導航仍保存閱讀位置並喚醒既有排程，但不影響任何教材的頁碼順位。
+
+## 0.9.4 生成診斷
+
+Engine 在共用 Pool 前註冊請求、進槽後記錄 Provider 開始，CodexClient 以可選回呼回報連線、thread/start、turn/start、接受及第一份非空 agentMessage。原始 RPC payload 不變，觀測不觸發額外模型請求。診斷只存有界記憶體；設定面板展開時才每秒讀取，手動匯出以 atomicJSON 寫入書庫根目錄。詳見 [DIAGNOSTICS](DIAGNOSTICS.md)。

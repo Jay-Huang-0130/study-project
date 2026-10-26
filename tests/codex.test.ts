@@ -80,3 +80,12 @@ test('parallel slow-start and completed requests remain isolated',async t=>{
 test('ordinary RPCs retain their 60-second timeout and dispose pending entries',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});const f=transport(),task=f.client.call('model/list'),rejected=assert.rejects(task,/model\/list 等待逾時/);t.mock.timers.tick(60_000);await rejected;assert.equal(f.pending(),0);
 });
+
+test('model timing callbacks distinguish acceptance from first output and do not add RPC calls',async()=>{
+ const f=transport(),phases:string[]=[],task=f.client.generate('private prompt',[],'m','i',undefined,undefined,undefined,phase=>phases.push(phase));await flush();assert.deepEqual(phases,['connecting','thread','starting']);
+ f.notice('turn/started','thread-1',{turn:{id:'accepted'}});await flush();assert.equal(phases.at(-1),'waiting');f.complete('thread-1');assert.equal(await task,'講稿');assert.deepEqual(phases,['connecting','thread','starting','waiting','receiving']);assert.deepEqual(f.calls.map(c=>c.method),['thread/start','turn/start','thread/unsubscribe']);
+});
+
+test('an observer failure cannot fail a model request or cause a retry',async()=>{
+ const f=transport(),task=f.client.generate('p',[],'m','i',undefined,undefined,undefined,()=>{throw Error('observer');});await flush();f.complete('thread-1');assert.equal(await task,'講稿');assert.equal(f.calls.filter(c=>c.method==='turn/start').length,1);
+});

@@ -1,6 +1,6 @@
 # 技術文件導覽
 
-基準：**0.9.3**；更新日期：**2026-10-26**。文件以目前程式為準，歷史決策保留在 [DEVLOG](../DEVLOG.md) 與 Git 歷史，不以早期規劃取代現行行為。
+基準：**0.9.4**；更新日期：**2026-10-26**。文件以目前程式為準，歷史決策保留在 [DEVLOG](../DEVLOG.md) 與 Git 歷史，不以早期規劃取代現行行為。
 
 | 你想了解 | 建議閱讀 |
 | --- | --- |
@@ -11,6 +11,7 @@
 | 科目群組與批次管理 | [GROUPS](GROUPS.md) |
 | 首頁、PDF 文字、滾輪與公式相容 | [READING](READING.md) |
 | 手動概念複習與來源驗證 | [CONCEPT-REVIEW](CONCEPT-REVIEW.md) |
+| 定位生成等待階段 | [DIAGNOSTICS](DIAGNOSTICS.md) |
 | 檢查已驗證到哪裡 | [TESTING](TESTING.md) → [DEVLOG](../DEVLOG.md) |
 | 提交修改或回報問題 | [CONTRIBUTING](../CONTRIBUTING.md) |
 

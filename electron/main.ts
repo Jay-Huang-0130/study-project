@@ -95,6 +95,12 @@ function registerIPC() {
   });
   handle('study:state', (id?: string): AppState => ({ groups:store.library.groups, books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? reviews.snapshot(store.book(id)) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
   handle('study:createGroup',(name:string)=>{const id=store.createGroup(name);changed();return id;});
+  const diagnosticSnapshot=(id?:string)=>{
+    const book=id?store.book(id):undefined;
+    return {limit:engine.diagnostics.limit,records:engine.diagnostics.snapshot(id),preparation:book?{count:book.count,textReady:book.textReady??book.extraction==='done',images:book.pages.filter(p=>p.imageReady).length,indexed:book.map?.pages.length??book.mapChunks.flat().length,lessons:book.pages.filter(p=>p.status==='done').length,mapComplete:book.mapStatus==='done'&&book.map?.complete!==false,paused:!!book.generationPaused,started:!!book.generationStarted}:undefined};
+  };
+  handle('study:diagnostics',diagnosticSnapshot);
+  handle('study:exportDiagnostics',(id?:string)=>{const file=path.join(store.root,`generation-diagnostics-${Date.now()}.json`);atomicJSON(file,{formatVersion:1,appVersion:app.getVersion(),exportedAt:new Date().toISOString(),...diagnosticSnapshot(id)});return file;});
   handle('study:renameGroup',(id:string,name:string)=>{store.renameGroup(id,name);changed();});
   handle('study:deleteGroup',(id:string)=>{store.deleteGroup(id);changed();});
   handle('study:moveBooks',(ids:string[],groupId:string|null)=>{store.moveBooks(ids,groupId);changed();});

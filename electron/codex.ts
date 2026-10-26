@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import {cancelled} from './cancellation';
 import { EventEmitter } from 'node:events';
+import type {ModelActivity} from '../src/shared';
 
 const require = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
 type RPC = { id?: number; method?: string; params?: any; result?: any; error?: { code?:number;message: string } };
@@ -87,15 +88,20 @@ export class CodexClient extends EventEmitter {
       try{this.send({ id, method, params });}catch(error){fail(error instanceof Error?error:new Error(String(error)));}
     });
   }
-  async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown, signal?:AbortSignal): Promise<string> {
+  async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown, signal?:AbortSignal,onActivity?:(phase:ModelActivity)=>void): Promise<string> {
+    const report=(phase:ModelActivity)=>{try{onActivity?.(phase);}catch{/* Observability must not affect model work. */}};
     signal?.throwIfAborted();
+    report('connecting');
     await this.start();signal?.throwIfAborted();
+    report('thread');
     const { thread } = await this.call('thread/start', {
       ...(model ? { model } : {}), ephemeral: true, cwd: this.cwd, approvalPolicy: 'never', sandbox: 'read-only',
       baseInstructions: instructions, config: { shell_tool: 'disabled', web_search: 'disabled', 'tools.disable_defaults': true },
     });
     if(signal?.aborted){void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});throw cancelled();}
-    let text = ''; let settled = false; let timer: NodeJS.Timeout;
+    let text = ''; let settled = false; let timer: NodeJS.Timeout;let hasOutput=false,accepted=false;
+    const accept=()=>{if(accepted)return;accepted=true;if(!hasOutput)report('waiting');};
+    const output=()=>{if(hasOutput)return;hasOutput=true;report('receiving');};
     return new Promise<string>((resolve, reject) => {
       const startController=new AbortController();
       let unsubscribed=false;const unsubscribe=()=>{if(unsubscribed)return;unsubscribed=true;void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});};
@@ -113,10 +119,10 @@ export class CodexClient extends EventEmitter {
         if (params?.threadId !== thread.id) return;
         // Notifications can prove acceptance before the turn/start RPC reply arrives.
         // A cancelled, unacknowledged start keeps only this guarded late-ID path.
-        if(method==='turn/started'&&params.turn?.id){turnId=params.turn.id;if(stopRequested)interrupt();else startController.abort();}
+        if(method==='turn/started'&&params.turn?.id){turnId=params.turn.id;if(stopRequested)interrupt();else{accept();startController.abort();}}
         if(settled){if(method==='turn/completed'){detach();startController.abort();unsubscribe();}return;}
-        if (method === 'item/agentMessage/delta') { text += params.delta; onDelta?.(text); }
-        if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase !== 'commentary') text = params.item.text;
+        if (method === 'item/agentMessage/delta') {if(params.delta)output();text += params.delta; onDelta?.(text); }
+        if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase !== 'commentary') {text = params.item.text;if(text)output();}
         if (method === 'turn/completed') {
           if (params.turn.status !== 'completed') finish(new Error(params.turn.error?.message ?? '生成未完成，請重試。'));
           else if (!text.trim()) finish(new Error('模型未回傳講解內容。'));
@@ -127,10 +133,11 @@ export class CodexClient extends EventEmitter {
       timer = setTimeout(() => {stopRequested=true;finish(new Error(turnId?'這次生成等待超過 8 分鐘，已暫停；已完成內容會保留，請按繼續生成重試。':'模型啟動等待超過 8 分鐘，已暫停；已完成內容會保留，請稍後按繼續生成。'));},TURN_TIMEOUT_MS);
       signal?.addEventListener('abort',abort,{once:true});
       if(signal?.aborted){abort();detach();unsubscribe();return;}
+      report('starting');
       void this.call('turn/start', {
         threadId: thread.id, input: [{ type: 'text', text: prompt, text_elements: [] }, ...images.map(p => ({ type: 'localImage', path: p }))],
         ...(schema ? { outputSchema: schema } : {}),
-      },TURN_TIMEOUT_MS+LATE_START_GRACE_MS,startController.signal).then(r => {turnId=r.turn.id;if(stopRequested)interrupt();}).catch(error=>{
+      },TURN_TIMEOUT_MS+LATE_START_GRACE_MS,startController.signal).then(r => {turnId=r.turn.id;if(stopRequested)interrupt();else if(!settled)accept();}).catch(error=>{
         if(startController.signal.aborted)return;
         finish(error);detach();unsubscribe();
       });

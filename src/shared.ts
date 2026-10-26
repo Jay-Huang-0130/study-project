@@ -1,6 +1,10 @@
 export type Status = 'pending' | 'running' | 'done' | 'error';
 export type GenerationState = 'running' | 'paused' | 'complete' | 'waiting';
 export type LessonDetail = 'concise' | 'standard' | 'detailed';
+export type ModelPhase='queued'|'connecting'|'thread'|'starting'|'waiting'|'receiving'|'done'|'error'|'cancelled';
+export type ModelActivity=Exclude<ModelPhase,'queued'|'done'|'error'|'cancelled'>;
+export interface ModelTrace {id:string;bookId:string;kind:'lesson'|'index'|'overview'|'question'|'review';pages:number[];model:string;createdAt:string;phase:ModelPhase;lastPhase?:ModelActivity|'queued';elapsedMs:number;phaseMs:number;marks:Partial<Record<ModelPhase,number>>;failure?:'timeout'|'network'|'quota'|'auth'|'other'}
+export interface GenerationDiagnostics {records:ModelTrace[];preparation?:{count:number;textReady:boolean;images:number;indexed:number;lessons:number;mapComplete:boolean;paused:boolean;started:boolean};limit:number}
 export interface StudySettings { paused:boolean; model:string; aiConcurrency:number; pdfWorkers:number; lessonDetail:LessonDetail; uiScale:number; readingFontSize:number }
 export interface OutlineEntry { title:string; page:number; children:OutlineEntry[] }
 export interface RuntimeStatus { activeLessons:number; indexing:boolean; modelActive:number; modelQueued:number; pdfWorkers:number }
@@ -35,6 +39,8 @@ export interface StudyAPI {
   deleteGroup(id:string):Promise<void>;
   moveBooks(ids:string[],groupId:string|null):Promise<void>;
   state(id?: string): Promise<AppState>;
+  diagnostics(id?:string):Promise<GenerationDiagnostics>;
+  exportDiagnostics(id?:string):Promise<string>;
   importPDF(): Promise<string | null>;
   navigate(id: string, page: number): Promise<void>;
   login(): Promise<void>;
