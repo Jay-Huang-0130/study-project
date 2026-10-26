@@ -1,0 +1,8 @@
+/* TextLayer alignment properties follow PDF.js 6.x; see Mozilla's text_layer_builder.css (Apache-2.0). */
+.paper{position:relative;flex-shrink:0}.pdf-stage{overscroll-behavior:contain}.pdf-text-host{position:absolute;inset:0}.paper.rendering .pdf-text-host{pointer-events:none;visibility:hidden}
+.pdf-text-host .textLayer{position:absolute;inset:0;text-align:initial;overflow:clip;line-height:1;letter-spacing:normal;word-spacing:normal;text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;--min-font-size:1;--text-scale-factor:calc(var(--total-scale-factor) * var(--min-font-size));--min-font-size-inv:calc(1 / var(--min-font-size))}
+.pdf-text-host .textLayer :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0;user-select:text}
+.pdf-text-host .textLayer> :not(.markedContent),.pdf-text-host .textLayer .markedContent span:not(.markedContent){z-index:1;--font-height:0;font-size:calc(var(--text-scale-factor) * var(--font-height));--scale-x:1;--rotate:0deg;transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv))}
+.pdf-text-host .textLayer .markedContent{display:contents}.pdf-text-host .textLayer ::selection{background:#4289d052;color:transparent}.pdf-text-host .textLayer br::selection{background:transparent}.pdf-text-notice{font-size:11px;color:#829087;align-self:center;line-height:1.7}
+
+.pdf-text-host .textLayer[data-main-rotation="90"]{transform:rotate(90deg) translateY(-100%)}.pdf-text-host .textLayer[data-main-rotation="180"]{transform:rotate(180deg) translate(-100%,-100%)}.pdf-text-host .textLayer[data-main-rotation="270"]{transform:rotate(270deg) translateX(-100%)}

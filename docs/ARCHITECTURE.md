@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.8.0**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.8.1**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -139,3 +139,7 @@ Updates controller 收到新版後開始背景下載，由 electron-updater 依 
 ## 手動概念複習
 
 Reviews 經 Engine.generateReview 使用同一模型容量（優先級 2），保持一般教材生成資格獨立。ReviewRecord、完成圖及 ReviewView 一起存於教材 book.json；啟動時 running 恢復成 paused。原頁每 4 頁 checkpoint，整合圖成功後才替換舊圖；晚到結果以物件身分、來源版本及 AbortSignal 阻擋。完整方法、上限與來源證明邊界見 [CONCEPT-REVIEW](CONCEPT-REVIEW.md)。
+
+## 閱讀呈現擴充（0.8.1）
+
+LibraryHome 使用既有 BookSummary，無新 IPC 或 AI 觸發。PDFViewer 同一份 viewport 同時建立 canvas 與 PDF.js TextLayer；皆完成且作業仍有效才提交，換頁清除舊文字層，取消時中斷兩者。滾輪只綁定 PDF 容器，PDFWheelPager 管理邊界與手勢。Markdown 顯示前以 normalizeMath 修復分隔符，原始 book.json 不變。相關檔案與限制見 [READING](READING.md)。
