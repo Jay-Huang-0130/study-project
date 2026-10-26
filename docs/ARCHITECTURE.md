@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.9.0**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.9.1**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -152,3 +152,5 @@ Reviews 在整合前隔離各子圖局部 ID，收回輸出後先去除完全相
 ## 0.9.0 群組與浮動地圖
 
 群組資料由 Store 以 library.json 原子保存，透過四個受信任 IPC 管理；不寫入每本 book.json，不影響來源指紋。詳見 [GROUPS](GROUPS.md)。ReviewView 新增可選 panel 與 toolsOpen；舊圖沿用預設位置與收合工具。FloatingInfo 使用 Pointer Capture 拖移／拉伸，ResizeObserver 限制於畫布內；FitFormula 只縮放顯示，保留原 LaTeX。保存欄位有有限數值及尺寸驗證，畫布仍存於原教材。
+
+0.9.1：panel-layout 集中管理一般／最大化／還原／八方向拉伸的純幾何狀態。normalBounds 與 maximized 隨教材視圖原子保存；主程序驗證模式布林值與還原矩形的有限數值及上限。浮動視窗不再依賴暫存 ref 作為唯一還原來源。

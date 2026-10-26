@@ -118,6 +118,8 @@ export class Reviews{
     for(const [id,p] of Object.entries(view.positions))if(!ids.has(id)||!p||!finite(p.x)||!finite(p.y))throw new Error('節點位置無效');
     if(view.toolsOpen!==undefined&&typeof view.toolsOpen!=='boolean')throw new Error('工具面板設定無效');
     const p=view.panel;if(p!==undefined&&(!p||(!finite(p.x)||!finite(p.y)||!Number.isFinite(p.width)||p.width<280||p.width>10000||!Number.isFinite(p.height)||p.height<160||p.height>10000||!Number.isInteger(p.fontSize)||p.fontSize<12||p.fontSize>26||typeof p.open!=='boolean')))throw new Error('資訊卡位置與大小無效');
+    if(p?.maximized!==undefined&&typeof p.maximized!=='boolean')throw new Error('資訊卡視窗狀態無效');
+    const normal=p?.normalBounds;if(normal!==undefined&&(!normal||!finite(normal.x)||!finite(normal.y)||!Number.isFinite(normal.width)||normal.width<280||normal.width>10000||!Number.isFinite(normal.height)||normal.height<160||normal.height>10000))throw new Error('資訊卡還原尺寸無效');
     book.review.view=structuredClone(view);this.save(book);
   }
   private save(book:Book){this.store.save(book);this.changed();}
