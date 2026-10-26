@@ -45,9 +45,7 @@ export class PDFLoader {
   }
   private assign(worker:Worker){
     if(this.workers.size-this.retiring.size>this.parallelism){this.retiring.add(worker);worker.postMessage({type:'finish'});return;}
-    const preferred=this.book.currentPage;
-    const score=(n:number)=>n===preferred?-1000:n>preferred&&n<preferred+10?n-preferred-100:n;
-    const page=this.book.pages.filter(p=>!p.imageReady&&!this.claimed.has(p.number)).sort((a,b)=>score(a.number)-score(b.number))[0];
+    const page=this.book.pages.filter(p=>!p.imageReady&&!this.claimed.has(p.number)).sort((a,b)=>a.number-b.number)[0];
     if(!page){this.retiring.add(worker);worker.postMessage({type:'finish'});return;}
     if(existsSync(path.join(this.dir,`p${page.number}.jpg`))){this.emit({type:'page',number:page.number});this.assign(worker);return;}
     this.claimed.add(page.number);this.workers.set(worker,page.number);worker.postMessage({type:'pageJob',page:page.number});

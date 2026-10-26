@@ -1,6 +1,6 @@
 # Study Project Engine：漸進教材理解與有限並行教學生成
 
-> 技術論文式設計說明。對應 **0.9.2**，更新於 **2026-10-26**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
+> 技術論文式設計說明。對應 **0.9.3**，更新於 **2026-10-26**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
 
 ## 摘要
 
@@ -34,7 +34,7 @@ Engine 位於 Electron 主程序，核心是 [engine.ts](../electron/engine.ts)�
 | --- | --- | --- |
 | `B` | 一份教材及其記憶體物件 | `Book`、`Store.books` |
 | `N` | 教材實體頁數 | `book.count` |
-| `c` | 目前閱讀的實體頁碼 | `book.currentPage` |
+| `c` | 目前閱讀的實體頁碼（不參與背景排序） | `book.currentPage` |
 | `P_i` | 第 i 頁的文字、圖像就緒、講稿與問答狀態 | `book.pages[i-1]` |
 | `S_t` | t 時刻已完成詳細索引的頁面集合 | `book.map.pages` |
 | `M_t` | 當時的索引、術語與總覽快照 | `BookMap` |
@@ -83,19 +83,17 @@ flowchart TD
 
 圖像為 JPEG，品質參數 90；渲染倍率為 `min(2, 1600 / 原頁寬)`。它是模型輸入資產，和 renderer 端即時 PDF 預覽是兩條不同路徑。
 
-頁面排序使用下列分數，取小者優先：
+頁面依 PDF 實體頁碼升序派工：
 
 ```text
-score(i, c) = -1000             if i = c
-              i - c - 100       if c < i < c + 10
-              i                 otherwise
+score(i) = i
 ```
 
-因此優先目前頁、接著後 9 頁，再依頁碼處理其他頁。這不是「只做前 10 頁」：背景啟動後仍會繼續補完整本。翻頁只重排尚未派出的工作，不會僅因閱讀位置改變就中斷已在途請求。
+閱讀位置 c 不參與排序。圖像、索引與講稿均由第 1 頁一路往後；跳過各階段已完成與在途工作，續作先補前方缺頁。一般翻頁只保存閱讀位置，不取消或重排背景工作。多個請求依序派出但可能不同順序完成，完成即可顯示，不等待整輪。
 
 ### 3.2 局部索引
 
-`indexChunk()` 只選圖像已就緒、尚未存在於 `mapChunks` 的頁面。第一批最多 2 頁，後續最多 6 頁；選出的頁面可不連續，文字、圖像與頁碼保持同序。
+`nextIndexPages()` 由最小尚未存在於 `mapChunks` 的頁碼開始收集；遇到第一個未就緒圖像便停止，不能跨過缺頁。`indexChunk()` 只接收此序列。第一批最多 2 頁，後續最多 6 頁；選出的頁面可不連續，文字、圖像與頁碼保持同序。
 
 模型透過結構化輸出產生 `page / topic / summary / terms / relatedPages / density`。摘要指示最多 3 個重點、約 120 字；這是生成指示，不是字數裁切器。`density` 為 `brief / normal / dense`。
 
@@ -142,8 +140,8 @@ SCHEDULE(book):
         start first eligible pending message, if any
         return started
 
-    n ← next pending, indexed, image-ready page by score
-    missing ← image-ready pages not yet in mapChunks, by score
+    n ← earliest pending page, only if its image and index are ready
+    missing ← ascending unknown pages; stop at first unready image
     canIndex ← no index job exists AND map is unfinished AND
                (missing is nonempty OR all pages have been indexed)
 
@@ -295,7 +293,7 @@ K_ideal(N) = 1 + ceil(max(0, N - 2) / 6), N ≥ 1
 
 | 證據 | 已支持的結論 | 不能推出的結論 |
 | --- | --- | --- |
-| 0.9.2 的 81 項自動測試，含可控制 Provider | 並行、取消、錯頁隔離、快取與更新控制流程符合測試條件 | 真實模型準確率、真實網路首段延遲 |
+| 0.9.3 的 83 項自動測試，含可控制 Provider | 並行、取消、錯頁隔離、快取與更新控制流程符合測試條件 | 真實模型準確率、真實網路首段延遲 |
 | 多頁亂序完成與問題優先測試 | 結果依原頁保存；等待問題可先於背景佇列 | 已在途請求被搶占、所有工作都有等待上限 |
 | PDF Worker 單次歷史量測：191 頁、1 緒 14.67s、2 緒 8.04s | 該機、該教材的本機圖像渲染約快 1.82 倍 | AI 推論也快 1.82 倍、所有電腦都有相同改善 |
 | 0.7.1 預覽對照與重載測試 | renderer PDF 生命週期與錯誤恢復修補有效 | Engine 教學品質因此提高 |
@@ -357,3 +355,7 @@ Reviews 將原頁擷取、每層組別及最終整合都納入計畫步數，各
 舊版將 turn/start 套用一般 60 秒 RPC timeout，可能在局部索引或其他講稿已完成時，因後續請求啟動較慢而整本暫停。現版區分啟動 RPC、turn/started 與 turn/completed；開始通知提供 ID 即可確定接受，成功仍需完成通知且有內容。每次生成有固定 8 分鐘上限，不因串流持續而無限延長。一般設定／目錄等 RPC 的 60 秒期限不變。
 
 取消立即停止本機接受結果；未知 ID 的啟動請求保留有界清理，等待晚到回覆或開始通知，再以其確切 turnId 中斷，不送空 ID。已完成的請求釋放啟動 RPC、計時器及監聽。並行請求仍以 threadId 隔離，不新增自動重試，也不修改提示、來源或排程容量。[官方 App Server 協定](https://developers.openai.com/codex/app-server/) 將回覆、開始／完成事件、interrupt 與 unsubscribe 定義為不同操作；本機 8 分鐘與寬限是本專案政策，並非上游 SLA。
+
+## 18. 與閱讀位置無關的派工（0.9.3）
+
+移除目前頁與後九頁優先分數，背景工作只依實體頁碼升序。對 pending 講稿先取最前頁，再檢查依賴；不以過濾可用頁面方式跳過缺頁。索引同樣從最前未索引頁收集，遇未就緒圖像即停止。已完成頁、快取圖像與索引維持，不重跑已完成成果。並行與公平教材輪替、問答優先、每頁原始來源與提示詞不變。這是派工政策改變，未宣稱實際模型延遲下降或語義品質提高。

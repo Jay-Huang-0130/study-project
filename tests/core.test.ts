@@ -6,7 +6,7 @@ import path from 'node:path';
 import { lessonGuide } from '../electron/lesson-style';
 import { normalizeSettings } from '../electron/store';
 import { Store } from '../electron/store';
-import { Engine, nextPage, validateMapChunk, acceptsResult, type Provider } from '../electron/engine';
+import { Engine, nextPage, nextIndexPages, validateMapChunk, acceptsResult, type Provider } from '../electron/engine';
 import type { Book } from '../src/shared';
 import { PriorityPool } from '../electron/priority-pool';
 
@@ -43,13 +43,37 @@ test('restart preserves completed lessons and recovers interrupted jobs without 
     assert.equal(restored.pages[1].status,'pending'); assert.equal(restored.pages[1].messages[0].status,'pending');
   } finally { f.cleanup(); }
 });
-test('page selection prioritizes a jump and the next pages; completed work is skipped', () => {
+test('lesson selection stays in ascending order after a jump and waits for the earliest missing prerequisites', () => {
   const f=setup(100); try {
-    f.book.currentPage=70; assert.equal(nextPage(f.book),70);
-    f.book.pages[69].status='done'; assert.equal(nextPage(f.book),71);
-    f.book.pages[70].status='running'; assert.equal(nextPage(f.book),72);
+    f.book.currentPage=70; assert.equal(nextPage(f.book),1);
+    f.book.pages[0].status='done'; assert.equal(nextPage(f.book),2);
+    f.book.pages[1].status='running'; assert.equal(nextPage(f.book),3);
+    f.book.pages[2].imageReady=false;assert.equal(nextPage(f.book),undefined);
+    f.book.pages[2].imageReady=true;withMap(f.book);f.book.map!.pages=f.book.map!.pages.filter(p=>p.page!==3);assert.equal(nextPage(f.book),undefined);
   } finally { f.cleanup(); }
 });
+test('index batches fill earliest holes and do not jump past an image still loading',()=>{
+ const f=setup(8);try{
+  const entry=(page:number)=>({page,topic:'t',summary:'s',terms:[],relatedPages:[]});
+  f.book.currentPage=8;f.book.mapChunks=[[entry(1),entry(4),entry(6)]];
+  f.book.pages[1].imageReady=false;assert.deepEqual(nextIndexPages(f.book,6),[]);
+  f.book.pages[1].imageReady=true;assert.deepEqual(nextIndexPages(f.book,2),[2,3]);
+  f.book.pages[4].imageReady=false;assert.deepEqual(nextIndexPages(f.book,6),[2,3]);
+  f.book.pages[4].imageReady=true;assert.deepEqual(nextIndexPages(f.book,6),[2,3,5,7,8]);
+ }finally{f.cleanup();}
+});
+
+test('parallel lessons refill by page number despite navigation and out-of-order completion',async()=>{
+ const f=setup(8);let engine:Engine|undefined;const started:number[]=[],releases=new Map<number,(text:string)=>void>();
+ try{
+  withMap(f.book);f.store.updateSettings({aiConcurrency:3});f.book.currentPage=8;f.book.pages[0].status='done';f.book.pages[0].lesson='保留的第一頁';
+  engine=new Engine(f.store,{generate:async prompt=>{const n=Number(prompt.match(/目標：PDF 實體第 (\d+) 頁/)![1]);started.push(n);return new Promise<string>(resolve=>releases.set(n,resolve));}},()=>{},()=>{});
+  engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();await until(()=>started.length===3);assert.deepEqual(started,[2,3,4]);
+  f.book.currentPage=7;engine.wake();releases.get(3)!('第三頁先完成');await until(()=>started.length===4);assert.deepEqual(started,[2,3,4,5]);assert.equal(f.book.pages[2].status,'done');assert.equal(f.book.pages[1].status,'running');assert.equal(f.book.pages[0].lesson,'保留的第一頁');
+  f.book.currentPage=1;engine.wake();releases.get(2)!('第二頁完成');await until(()=>started.length===5);assert.deepEqual(started,[2,3,4,5,6]);
+ }finally{engine?.stop();for(const release of releases.values())release('結束測試');await new Promise(r=>setImmediate(r));f.cleanup();}
+});
+
 test('map validation rejects missing and duplicate source pages', () => {
   const entry={page:1,topic:'t',summary:'s',terms:[],relatedPages:[2,999]};
   assert.throws(()=>validateMapChunk({pages:[entry]},[1,2],3));
@@ -150,7 +174,7 @@ test('shutdown returns interrupted lessons to pending for automatic continuation
     assert.equal(f.store.settings.paused,false);
   } finally {engine?.stop();f.cleanup();}
 });
-test('indexing starts with the page the reader jumped to rather than assuming a contiguous prefix',async()=>{
+test('indexing starts from the first page even when the reader has jumped ahead',async()=>{
   const f=setup(100);let engine:Engine|undefined;
   try{
     f.book.currentPage=70;
@@ -159,7 +183,7 @@ test('indexing starts with the page the reader jumped to rather than assuming a 
       return JSON.stringify({pages:images.map(file=>({page:Number(file.match(/p(\d+)\.jpg$/)![1]),topic:'概念',summary:'說明',terms:[],relatedPages:[]}))});
     }};
     engine=new Engine(f.store,provider,()=>{},()=>{});engine.activeId=f.book.id;f.book.generationStarted=true;engine.authenticated=true;engine.wake();
-    await until(()=>!!f.book.map);assert.deepEqual(f.book.map!.pages.map(p=>p.page),[70,71]);
+    await until(()=>!!f.book.map);assert.deepEqual(f.book.map!.pages.map(p=>p.page),[1,2]);
     assert.equal(f.book.mapChunks.flat().length,2);
   }finally{engine?.stop();f.cleanup();}
 });

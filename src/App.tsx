@@ -154,7 +154,7 @@ function Preparation({book,page,connected,paused,login,retry}: { book: Book; pag
   if(paused)return <div className="idle-notice"><span>{book.pauseReason||'尚未開始生成'}</span><small>按右下角「開始生成」或「繼續生成」，補完未完成內容。</small></div>;
   const error = book.extractionError || book.mapError || page?.error;
   const title = error ? '這一步需要再試一次' : !connected ? '連接老師，開始講解' : book.extraction !== 'done' ? '正在整理教材頁面' : !book.map ? '先準備你正在看的頁面' : '這一頁正在等待講解';
-  const body = error || (!connected ? '你可以先自由翻閱 PDF。登入後，按開始生成即可準備講解。' : book.extraction !== 'done' ? `已整理 ${book.extracted} / ${book.count || '…'} 頁。圖表與公式會一起保留。` : '目前頁面會優先處理。你可以繼續翻閱，完成後回來閱讀。');
+  const body = error || (!connected ? '你可以先自由翻閱 PDF。登入後，按開始生成即可準備講解。' : book.extraction !== 'done' ? `已整理 ${book.extracted} / ${book.count || '…'} 頁。圖表與公式會一起保留。` : '講解依頁碼由前往後準備，翻頁不會改變生成順序。你可以先閱讀已完成的頁面。');
   return <div className="preparation"><div className="preparation-icon"><BookOpen size={28}/></div><h3>{title}</h3><p>{body}</p>{error ? <button className="secondary-button" onClick={retry}><RefreshCw size={15}/>重試</button> : !connected ? <button className="secondary-button" onClick={login}>連接 ChatGPT <ArrowRight size={15}/></button> : <div className="skeleton"><i/><i/><i/></div>}</div>;
 }
 function MapContent({book,outline,navigate}: {book: Book; outline:OutlineEntry[]; navigate: (n: number) => void}) {

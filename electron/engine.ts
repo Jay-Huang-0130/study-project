@@ -26,14 +26,21 @@ export function validateMapChunk(raw: any, expected: number[], total: number): P
   return expected.map(n => byPage.get(n)!);
 }
 export function orderedPages(book: Book): number[] {
-  return book.pages.map(p=>p.number).sort((a,b) => {
-    const score = (n: number) => n === book.currentPage ? -1000 : n > book.currentPage && n < book.currentPage+10 ? n-book.currentPage-100 : n;
-    return score(a)-score(b);
-  });
+  return book.pages.map(p=>p.number).sort((a,b)=>a-b);
 }
 export function nextPage(book: Book): number | undefined {
   const indexed = book.map ? new Set(book.map.pages.map(p=>p.page)) : undefined;
-  return orderedPages(book).find(n=>book.pages[n-1].status==='pending' && book.pages[n-1].imageReady && (!indexed || indexed.has(n)));
+  const n=orderedPages(book).find(n=>book.pages[n-1].status==='pending');
+  return n!==undefined&&book.pages[n-1].imageReady&&(!indexed||indexed.has(n))?n:undefined;
+}
+export function nextIndexPages(book:Book,limit:number):number[]{
+  const known=new Set(book.mapChunks.flat().map(p=>p.page)),next:number[]=[];
+  for(const n of orderedPages(book)){
+    if(known.has(n))continue;
+    if(!book.pages[n-1].imageReady)break;
+    next.push(n);if(next.length>=limit)break;
+  }
+  return next;
 }
 export function acceptsResult(book: Book, page: number, mapVersion: string, generationId?: string): boolean {
   const p=book.pages[page-1];
@@ -90,7 +97,7 @@ export class Engine {
     }}
     const n=book.map?nextPage(book):undefined;
     const known=new Set(book.mapChunks.flat().map(p=>p.page));
-    const missing=orderedPages(book).filter(n=>!known.has(n)&&book.pages[n-1].imageReady);
+    const missing=nextIndexPages(book,known.size?6:2);
     const indexKey=`${book.id}:index`;
     const canIndex=book.count>0&&book.mapStatus!=='done'&&book.mapStatus!=='error'&&!this.jobs.has(indexKey)&&(missing.length>0||known.size===book.count);
     if(n!==undefined&&((this.preferLesson.has(book)&&![...this.jobs.values()].some(j=>j.book===book&&j.kind==='lesson'))||!canIndex)){
@@ -99,7 +106,7 @@ export class Engine {
     }
     if(canIndex){
       void this.launch(book,'index','index',async signal=>{
-        if(missing.length)await this.indexChunk(book,missing.slice(0,known.size?6:2),signal);
+        if(missing.length)await this.indexChunk(book,missing,signal);
         else await this.finalizeMap(book,signal);
         this.preferLesson.add(book);
       });return true;

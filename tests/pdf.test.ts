@@ -32,7 +32,7 @@ test('PDF worker pool completes distinct pages, follows navigation, and reuses c
         if(msg.type==='error'){clearTimeout(timeout);reject(new Error(msg.error));}
       },()=>{maxWorkers=Math.max(maxWorkers,loader?.workerCount??0);});loader.start();
     });
-    const first=await run();assert.equal(first.maxWorkers,2);assert.equal(first.seen[0],7);assert.equal(first.seen.length,12);assert.equal(new Set(first.seen).size,12);
+    const first=await run();assert.equal(first.maxWorkers,2);assert.equal(first.seen[0],1);assert.equal(first.seen.length,12);assert.equal(new Set(first.seen).size,12);
     assert.match(book.pages[0].text,/Page 1/);const jpg=path.join(store.dir(book.id),'p7.jpg'),mtime=statSync(jpg).mtimeMs;
     // Recover a completed image even if its metadata was not persisted before a crash.
     book.pages[6].imageReady=false;await run();assert.equal(statSync(jpg).mtimeMs,mtime);assert.equal(book.pages[6].imageReady,true);
