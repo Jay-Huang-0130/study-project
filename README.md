@@ -134,7 +134,7 @@ npm run dev
 | 文件 | 內容 |
 | --- | --- |
 | [文件導覽](docs/README.md) | 依使用者、開發者與研究閱讀順序整理 |
-| [產品規格](SPEC.md) | 0.7.1 行為、範圍與驗收條件 |
+| [產品規格](SPEC.md) | 0.8.0 行為、範圍與驗收條件 |
 | [架構](docs/ARCHITECTURE.md) | 程序、資料、IPC、安全與預覽生命週期 |
 | [Engine 設計論文](docs/ENGINE.md) | 問題定義、形式化模型、演算法、驗證與限制 |
 | [效能分析](docs/PERFORMANCE.md) | 動態補位、PDF 工作緒、歷史量測與實驗設計 |
