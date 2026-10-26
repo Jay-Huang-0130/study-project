@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.8.2**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.8.3**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -143,3 +143,7 @@ Reviews 經 Engine.generateReview 使用同一模型容量（優先級 2），�
 ## 閱讀呈現擴充（0.8.1）
 
 LibraryHome 使用既有 BookSummary，無新 IPC 或 AI 觸發。PDFViewer 同一份 viewport 同時建立 canvas 與 PDF.js TextLayer；皆完成且作業仍有效才提交，換頁清除舊文字層，取消時中斷兩者。滾輪只綁定 PDF 容器，PDFWheelPager 管理邊界與手勢。Markdown 顯示前以 normalizeMath 修復分隔符，原始 book.json 不變。相關檔案與限制見 [READING](READING.md)。
+
+## 合併驗證恢復（0.8.3）
+
+Reviews 在整合前隔離各子圖局部 ID，收回輸出後先去除完全相同的重複紀錄，再做嚴格驗證。checkedGraph 只對驗證錯誤最多補發一次修正；validationFailure 保留本組錯誤與有限大小的無效輸出，不影響成功快取。模型額度與網路錯誤仍由使用者手動處理。

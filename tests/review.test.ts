@@ -4,7 +4,7 @@ import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../electron/store';
-import {Reviews,validateReview,sourceKey,reviewFingerprint,type ReviewGenerate} from '../electron/review';
+import {Reviews,validateReview,sourceKey,reviewFingerprint,namespaceReviewInputs,removeExactReviewDuplicates,reviewSchema,type ReviewGenerate} from '../electron/review';
 import {reviewReady,reviewMergePlan,reviewProgress} from '../src/review-data';
 import type {Book,ConceptGraph,ReviewSource} from '../src/shared';
 
@@ -125,4 +125,51 @@ test('late activity after cancellation cannot restore the running request status
   const reviews=new Reviews(f.store,async(_b,_s,_p,_images,_model,activity)=>{notify=activity;activity?.('running');return new Promise(()=>{});},()=>{});
   try{reviews.start(f.book.id,true);assert.equal(f.book.review!.request!.state,'running');reviews.cancel(f.book.id);notify?.('receiving');await reviews.stop();assert.equal(f.book.review!.status,'paused');assert.equal(f.book.review!.request,undefined);}
   finally{await reviews.stop();f.cleanup();}
+});
+
+test('merge input namespaces isolate local IDs and preserve all content and source references',()=>{
+  const inputs=[graph(),graph(5)],namespaced=namespaceReviewInputs(inputs);
+  assert.equal(new Set(namespaced.flatMap(g=>g.nodes.map(n=>n.id))).size,8);
+  for(const g of namespaced){const ids=new Set(g.nodes.map(n=>n.id));assert.ok(ids.has(g.rootId));assert.ok(g.edges.every(e=>ids.has(e.source)&&ids.has(e.target)));}
+  assert.deepEqual(namespaced[1].nodes[2].sources,inputs[1].nodes[2].sources);assert.equal(namespaced[1].nodes[2].label,'ASK');assert.equal(inputs[0].rootId,'root');
+});
+
+test('only exactly identical duplicate records can be collapsed, while conflicting IDs still fail',()=>{
+  const f=fixture();try{
+    const g=graph();g.nodes.push(structuredClone(g.nodes[2]));g.edges.push(structuredClone(g.edges[1]));
+    assert.deepEqual(validateReview(removeExactReviewDuplicates(g),f.book,new Set([1])),graph());
+    g.nodes[g.nodes.length-1].label='不同概念';assert.throws(()=>validateReview(removeExactReviewDuplicates(g),f.book,new Set([1])),/nodes\[4\].id 重複：ask/);
+    const long=graph();long.nodes[2].summary='a'.repeat(241);assert.throws(()=>validateReview(long,f.book,new Set([1])),/nodes\[2\].summary.*240.*241/);
+    const schema=reviewSchema as any;assert.equal(schema.properties.nodes.items.properties.summary.maxLength,240);assert.equal(schema.properties.nodes.items.properties.id.maxLength,64);assert.equal(schema.properties.nodes.items.properties.sources.maxItems,12);
+  }finally{f.cleanup();}
+});
+
+function secondLayerFixture(){
+  const f=fixture(107);
+  f.book.review={status:'error',stage:'第 2 層合併重複概念與關係 · 第 1/2 組',completedChunks:27,totalChunks:27,sourceVersion:reviewFingerprint(f.book),model:f.store.settings.model,chunks:Array.from({length:27},(_,i)=>graph(i*4+1)),mergeLevels:[Array.from({length:7},()=>graph())],completedMerges:7};
+  f.store.save(f.book);return f;
+}
+
+test('second-layer 34/37 failure is repaired once using precise feedback without rerunning the 34 completed steps',async()=>{
+  const f=secondLayerFixture(),prompts:string[]=[];
+  const reviews=new Reviews(f.store,async(_b,_s,prompt,images)=>{
+    assert.equal(images.length,0);prompts.push(prompt);const result=graph();if(prompts.length===1)result.nodes[2].summary='a'.repeat(241);
+    return JSON.stringify(result);
+  },()=>{});
+  try{
+    assert.equal(reviewProgress(f.book.review!).completed,34);reviews.start(f.book.id,true);await until(()=>f.book.review?.status==='done');
+    assert.equal(prompts.length,4);assert.ok(prompts[1].includes('nodes[2].summary'));assert.ok(prompts[1].includes('【驗證回饋】'));assert.equal(f.book.review!.completedMerges,10);assert.equal(reviewProgress(f.book.review!).completed,37);assert.equal(f.book.review!.validationFailure,undefined);
+  }finally{await reviews.stop();f.cleanup();}
+});
+
+test('conflicting duplicate ID repair is bounded, retains diagnostic output and checkpoints, and manual continue reuses feedback',async()=>{
+  const f=secondLayerFixture();let calls=0,repaired=false;const prompts:string[]=[];
+  const reviews=new Reviews(f.store,async(_b,_s,prompt)=>{
+    calls++;prompts.push(prompt);const g=graph();if(!repaired)g.nodes.push({...g.nodes[2],label:'different'});return JSON.stringify(g);
+  },()=>{});
+  try{
+    reviews.start(f.book.id,true);await until(()=>f.book.review?.status==='error');await reviews.stop();
+    assert.equal(calls,2);assert.equal(reviewProgress(f.book.review!).completed,34);assert.equal(f.book.review!.mergeLevels![0].length,7);assert.equal(f.book.review!.validationFailure!.attempts,2);assert.ok(f.book.review!.validationFailure!.output?.includes('different'));assert.match(f.book.review!.error!,/id 重複/);
+    repaired=true;reviews.start(f.book.id,true);await until(()=>f.book.review?.status==='done');assert.equal(calls,5);assert.ok(prompts[2].includes('【驗證回饋】'));assert.equal(f.book.review!.completedMerges,10);
+  }finally{await reviews.stop();f.cleanup();}
 });
