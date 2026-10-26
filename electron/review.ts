@@ -1,7 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import path from 'node:path';
 import type {Book,ConceptGraph,ReviewSource,ReviewView} from '../src/shared';
-import {reviewReady} from '../src/review-data';
+import {reviewReady,reviewMergePlan} from '../src/review-data';
 import {Store} from './store';
 import {abortable,cancelled} from './cancellation';
 
@@ -50,7 +50,7 @@ export function validateReview(raw:unknown,book:Book,allowedPages:Set<number>,ev
   return structuredClone(g);
 }
 
-export type ReviewGenerate=(book:Book,signal:AbortSignal,prompt:string,images:string[],model:string)=>Promise<string>;
+export type ReviewGenerate=(book:Book,signal:AbortSignal,prompt:string,images:string[],model:string,activity?:(state:'running'|'receiving')=>void)=>Promise<string>;
 export class Reviews{
   private jobs=new Map<string,{book:Book;controller:AbortController;promise:Promise<void>}>();
   constructor(private store:Store,private generate:ReviewGenerate,private changed:()=>void){}
@@ -63,18 +63,18 @@ export class Reviews{
     if(!restart&&old?.status==='done'&&old.graph?.sourceVersion===version)return;
     if(!authenticated)throw new Error('請先登入 ChatGPT，再手動生成概念圖。');
     const reuse=!restart&&old?.sourceVersion===version&&old.model===this.store.settings.model;
-    book.review={status:'running',stage:'準備核對原頁',completedChunks:reuse?old.completedChunks:0,totalChunks:Math.ceil(book.count/4),sourceVersion:version,model:this.store.settings.model,chunks:reuse?old.chunks:[],graph:old?.graph,view:old?.view};
+    book.review={status:'running',stage:'準備核對原頁',completedChunks:reuse?old.completedChunks:0,totalChunks:Math.ceil(book.count/4),sourceVersion:version,model:this.store.settings.model,chunks:reuse?old.chunks:[],mergeLevels:reuse?old.mergeLevels??[]:[],completedMerges:reuse?(old.mergeLevels??[]).reduce((n,level)=>n+level.length,0):0,totalMerges:reviewMergePlan(Math.ceil(book.count/4)).reduce((a,b)=>a+b,0),phase:'extract',graph:old?.graph,view:old?.view};
     this.save(book);
     const job={book,controller:new AbortController(),promise:Promise.resolve()};this.jobs.set(id,job);
     job.promise=this.run(book,job.controller.signal,version).catch(error=>{
       if(this.store.books.get(id)!==book||this.jobs.get(id)!==job)return;
       if(job.controller.signal.aborted)return;
-      book.review!.status='error';book.review!.error=error instanceof Error?error.message:String(error);book.review!.stage='生成未完成，可手動重試';this.save(book);
+      book.review!.request=undefined;book.review!.status='error';book.review!.error=error instanceof Error?error.message:String(error);book.review!.stage='生成未完成，可手動重試';this.save(book);
     }).finally(()=>{if(this.jobs.get(id)===job)this.jobs.delete(id);this.changed();});
   }
   cancel(id:string,reason='已暫停概念圖生成'){
     const job=this.jobs.get(id);if(!job)return;
-    job.controller.abort();if(this.store.books.get(id)===job.book){job.book.review!.status='paused';job.book.review!.stage=reason;this.save(job.book);}
+    job.controller.abort();if(this.store.books.get(id)===job.book){job.book.review!.request=undefined;job.book.review!.status='paused';job.book.review!.stage=reason;this.save(job.book);}
   }
   async stop(){for(const id of this.jobs.keys())this.cancel(id,'程式已關閉，等待手動繼續');await Promise.allSettled([...this.jobs.values()].map(j=>j.promise));}
   cancelAll(reason:string){for(const id of this.jobs.keys())this.cancel(id,reason);}
@@ -90,7 +90,15 @@ export class Reviews{
   private async request(book:Book,signal:AbortSignal,version:string,prompt:string,images:string[]){
     this.valid(book,signal,version);
     if(prompt.length>220000)throw new Error('這批教材概念量超出本版可處理範圍，請拆成較小教材再整理。');
-    const text=await abortable(this.generate(book,signal,prompt,images,book.review!.model),signal);this.valid(book,signal,version);
+    const record=book.review!,request={state:'queued' as 'queued'|'running'|'receiving',queuedAt:new Date().toISOString(),startedAt:undefined as string|undefined,lastResponseAt:undefined as string|undefined};
+    record.request=request;this.save(book);let publishedAt=Date.now();
+    const activity=(state:'running'|'receiving')=>{
+      if(signal.aborted||this.store.books.get(book.id)!==book||book.review!==record||record.request!==request)return;
+      const changed=request.state!==state;request.state=state;
+      if(state==='running')request.startedAt=new Date().toISOString();else request.lastResponseAt=new Date().toISOString();
+      if(changed||Date.now()-publishedAt>=1500){publishedAt=Date.now();this.changed();}
+    };
+    const text=await abortable(this.generate(book,signal,prompt,images,record.model,activity),signal);this.valid(book,signal,version);record.request=undefined;
     return JSON.parse(text.trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));
   }
   private async run(book:Book,signal:AbortSignal,version:string){
@@ -98,23 +106,34 @@ export class Reviews{
     const guide='圖必須有 topic 根節點；每個其他節點恰有一條由 topic 指向它的 contains 階層連線，所有節點可從根經 contains 到達，不可循環。除此之外用 defines/uses/compares/depends/example 表達有教材依據的強關聯，label 寫短中文關係，detail 解釋為何相連，不能為畫線而編造。術語保留縮寫及英文全名；公式填 LaTeX（不加美元分隔符）、符號定義與單位、使用條件。沒有內容的字串與陣列可留空。summary 一句中文，detail 精簡。每個節點和連線都要有 1–12 筆 sources：page 為實體頁碼、kind=text 的 quote 必須逐字出自提供的原頁文字，kind=visual 的 quote 為附圖中可核對的具體位置／內容說明；不能以生成講稿當原文。';
     for(let i=r.chunks.length;i<r.totalChunks;i++){
       this.valid(book,signal,version);const pages=book.pages.slice(i*4,i*4+4),allowed=new Set(pages.map(p=>p.number));
-      r.stage=`核對原頁與概念 · 第 ${i+1}/${r.totalChunks} 批`;this.save(book);
+      r.phase='extract';r.stage=`核對原頁與概念 · 第 ${i+1}/${r.totalChunks} 批`;this.save(book);
       const prompt=`【階段：原頁概念擷取】教材 ${book.name}，共 ${book.count} 頁。建立這批原頁的複習概念圖，最多 12 個節點、24 條連線；重點為值得回想的定義、縮寫、公式與用法，封面不湊內容。${guide}\n全書總覽（輔助定位，非原頁證據）：${book.map!.overview}\n附圖依序：${pages.map(p=>p.number).join('、')}\n原頁文字：\n${pages.map(p=>`【第 ${p.number} 頁】\n${p.text}\n索引輔助：${JSON.stringify(book.map!.pages.find(x=>x.page===p.number))}`).join('\n\n')}`;
       const graph=validateReview(await this.request(book,signal,version,prompt,pages.map(p=>path.join(this.store.dir(book.id),`p${p.number}.jpg`))),book,allowed);
       if(graph.nodes.length>12||graph.edges.length>24)throw new Error('原頁概念過多，請手動重試以重新濃縮。');
       r.chunks.push(graph);r.completedChunks=r.chunks.length;this.save(book);
     }
     const evidence=new Set(r.chunks.flatMap(g=>[...g.nodes,...g.edges].flatMap(n=>n.sources.map(sourceKey)))),allowed=new Set(book.pages.map(p=>p.number));
-    const merge=async(graphs:ConceptGraph[],final:boolean)=>{
-      r.stage=final?'整合全書關係與核對來源':'分層合併重複概念與關係';this.save(book);
+    const merge=async(graphs:ConceptGraph[],final:boolean,stage:string)=>{
+      r.phase=final?'finalize':'merge';r.stage=stage;this.save(book);
       const prompt=`【階段：${final?'全書概念整合':'中間概念整合'}】${guide}\n僅依以下已核對圖形合併，不新增常識。sources 必須逐字沿用輸入中的 page/kind/quote。合併相同術語並保留英文全名、公式、參數及適用條件。移除批次用的頁範圍根節點，改成有意義的主題層級。${final?'濃縮至最多 80 個節點、160 條連線，主題約 4–10 個，勿將所有節點平鋪在根下。':'濃縮至最多 40 個節點、80 條連線，保留關鍵術語、公式與跨主題關係。'} 不確定的關係不要連。\n${JSON.stringify(graphs)}`;
       const result=validateReview(await this.request(book,signal,version,prompt,[]),book,allowed,evidence);
       if(result.nodes.length>(final?80:40)||result.edges.length>(final?160:80))throw new Error('整合概念過多，請手動重試以重新濃縮。');
       return result;
     };
-    let groups=r.chunks;
-    while(groups.length>4){const next:ConceptGraph[]=[];for(let i=0;i<groups.length;i+=4)next.push(await merge(groups.slice(i,i+4),false));groups=next;}
-    const graph=await merge(groups,true);this.valid(book,signal,version);
-    r.graph={...graph,generationId:randomUUID(),sourceVersion:version,createdAt:new Date().toISOString(),model:r.model};r.status='done';r.stage='概念圖已保存';r.error=undefined;r.view=undefined;this.save(book);
+    const levels=r.mergeLevels??(r.mergeLevels=[]);
+    const checkpoint=()=>{r.completedMerges=levels.reduce((n,level)=>n+level.length,0);this.save(book);};
+    let groups=r.chunks,level=0;
+    while(groups.length>4){
+      const next=levels[level]??(levels[level]=[]),count=Math.ceil(groups.length/4);
+      for(let i=next.length;i<count;i++){
+        const result=await merge(groups.slice(i*4,i*4+4),false,`第 ${level+1} 層合併重複概念與關係 · 第 ${i+1}/${count} 組`);
+        next.push(result);checkpoint();
+      }
+      groups=next;level++;
+    }
+    const final=levels[level]??(levels[level]=[]);
+    const graph=final[0]??await merge(groups,true,'全書整合 · 建立主題關係與核對來源');this.valid(book,signal,version);
+    if(!final.length){final.push(graph);checkpoint();}
+    r.graph={...graph,generationId:randomUUID(),sourceVersion:version,createdAt:new Date().toISOString(),model:r.model};r.status='done';r.phase='done';r.stage='概念圖已保存';r.error=undefined;r.view=undefined;this.save(book);
   }
 }

@@ -161,8 +161,13 @@ export class Engine {
       this.valid(book,signal);return answer;
     },signal);
   }
-  generateReview(book:Book,signal:AbortSignal,prompt:string,images:string[],model:string){
-    return this.generate(book,2,signal,prompt,images,model,reviewInstructions,undefined,reviewSchema);
+  generateReview(book:Book,signal:AbortSignal,prompt:string,images:string[],model:string,activity?:(state:'running'|'receiving')=>void){
+    this.valid(book,signal);
+    return this.pool.run(2,async()=>{
+      this.valid(book,signal);activity?.('running');
+      const answer=await abortable(this.provider.generate(prompt,images,model,reviewInstructions,()=>activity?.('receiving'),reviewSchema,signal),signal);
+      this.valid(book,signal);return answer;
+    },signal);
   }
   private partialMap(book:Book){
     const pages=[...new Map(book.mapChunks.flat().map(p=>[p.page,p])).values()].sort((a,b)=>a.page-b.page);

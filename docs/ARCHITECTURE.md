@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.8.1**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.8.2**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -138,7 +138,7 @@ Updates controller 收到新版後開始背景下載，由 electron-updater 依 
 
 ## 手動概念複習
 
-Reviews 經 Engine.generateReview 使用同一模型容量（優先級 2），保持一般教材生成資格獨立。ReviewRecord、完成圖及 ReviewView 一起存於教材 book.json；啟動時 running 恢復成 paused。原頁每 4 頁 checkpoint，整合圖成功後才替換舊圖；晚到結果以物件身分、來源版本及 AbortSignal 阻擋。完整方法、上限與來源證明邊界見 [CONCEPT-REVIEW](CONCEPT-REVIEW.md)。
+Reviews 經 Engine.generateReview 使用同一模型容量（優先級 2），保持一般教材生成資格獨立。ReviewRecord、完成圖及 ReviewView 一起存於教材 book.json；啟動時 running 恢復成 paused。原頁每 4 頁 checkpoint，各層合併也逐組 checkpoint；整合圖成功後才替換舊圖；晚到結果以物件身分、來源版本及 AbortSignal 阻擋。完整方法、上限與來源證明邊界見 [CONCEPT-REVIEW](CONCEPT-REVIEW.md)。
 
 ## 閱讀呈現擴充（0.8.1）
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {Store} from '../electron/store';
 import {Reviews,validateReview,sourceKey,reviewFingerprint,type ReviewGenerate} from '../electron/review';
-import {reviewReady} from '../src/review-data';
+import {reviewReady,reviewMergePlan,reviewProgress} from '../src/review-data';
 import type {Book,ConceptGraph,ReviewSource} from '../src/shared';
 
 function fixture(count=5){
@@ -91,4 +91,38 @@ test('source changes mark cache stale and reject in-flight results; deleted/reim
     const version=reviewFingerprint(f.book);reviews.start(f.book.id,true);f.book.pages[0].lesson+=' changed';release(JSON.stringify(graph()));await until(()=>f.book.review?.status==='error');assert.notEqual(reviewFingerprint(f.book),version);assert.equal(f.book.review!.graph,undefined);await reviews.stop();
     reviews.start(f.book.id,true);const old=f.book;f.store.books.set(old.id,structuredClone(old));release(JSON.stringify(graph()));await reviews.stop();assert.equal(f.store.book(old.id).review!.graph,undefined);
   }finally{await reviews.stop();f.cleanup();}
+});
+
+test('26 original-page batches are 26/36 overall steps, not a completed map',()=>{
+  const f=fixture(104);try{
+    assert.deepEqual(reviewMergePlan(26),[7,2,1]);assert.deepEqual(reviewMergePlan(4),[1]);
+    const r={status:'running' as const,stage:'合併',completedChunks:26,totalChunks:26,sourceVersion:'x',model:'mock',chunks:[]};
+    assert.deepEqual(reviewProgress(r),{total:36,completed:26,merges:10,completedMerges:0});
+    assert.equal(reviewProgress({...r,completedMerges:10}).completed,35);
+    assert.equal(reviewProgress({...r,status:'done',completedMerges:10}).completed,36);
+  }finally{f.cleanup();}
+});
+
+test('merge checkpoints survive restart and resume at the next group without repeating extraction or completed merges',async()=>{
+  const f=fixture(104);let merges=0,extracts=0,failed=false;
+  let reviews=new Reviews(f.store,async(_b,_s,_p,images,model,activity)=>{
+    activity?.('running');activity?.('receiving');
+    if(images.length){extracts++;return JSON.stringify(graph(pages(images)[0]));}
+    merges++;if(merges===2){failed=true;throw new Error('quota');}return JSON.stringify(graph());
+  },()=>{});
+  try{
+    reviews.start(f.book.id,true);await until(()=>f.book.review?.status==='error');await reviews.stop();
+    assert.equal(failed,true);assert.equal(extracts,26);assert.equal(f.book.review!.completedMerges,1);assert.equal(f.book.review!.mergeLevels![0].length,1);assert.equal(f.book.review!.request,undefined);
+    const store=new Store(f.store.root),book=store.book(f.book.id);
+    reviews=new Reviews(store,async(_b,_s,_p,images)=>{assert.equal(images.length,0);merges++;return JSON.stringify(graph());},()=>{});
+    assert.equal(merges,2);reviews.start(book.id,true);await until(()=>book.review?.status==='done');
+    assert.equal(merges,11);assert.equal(book.review!.completedMerges,10);assert.deepEqual(book.review!.mergeLevels!.map(x=>x.length),[7,2,1]);assert.equal(reviewProgress(book.review!).completed,36);
+  }finally{await reviews.stop();f.cleanup();}
+});
+
+test('late activity after cancellation cannot restore the running request status',async()=>{
+  const f=fixture(1);let notify:((state:'running'|'receiving')=>void)|undefined;
+  const reviews=new Reviews(f.store,async(_b,_s,_p,_images,_model,activity)=>{notify=activity;activity?.('running');return new Promise(()=>{});},()=>{});
+  try{reviews.start(f.book.id,true);assert.equal(f.book.review!.request!.state,'running');reviews.cancel(f.book.id);notify?.('receiving');await reviews.stop();assert.equal(f.book.review!.status,'paused');assert.equal(f.book.review!.request,undefined);}
+  finally{await reviews.stop();f.cleanup();}
 });
