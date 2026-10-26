@@ -80,6 +80,7 @@ test('cancel ignores late provider output, restart pauses, manual regeneration f
     reviews=new Reviews(f.store,async()=>JSON.stringify(graph()),()=>{});reviews.start(f.book.id,true);await until(()=>f.book.review?.status==='done');await reviews.stop();
     const old=structuredClone(f.book.review!.graph);reviews.saveView(f.book.id,{positions:{ask:{x:20,y:30}},viewport:{x:10,y:20,zoom:.7},expanded:['root','topic'],selected:'ask'});
     assert.throws(()=>reviews.saveView(f.book.id,{positions:{},viewport:{x:0,y:0,zoom:0},expanded:[]}));
+    const card={x:20,y:40,width:650,height:480,fontSize:18,open:true};reviews.saveView(f.book.id,{positions:{},viewport:{x:0,y:0,zoom:1},expanded:['root'],panel:card,toolsOpen:true});assert.deepEqual(f.book.review!.view!.panel,card);assert.throws(()=>reviews.saveView(f.book.id,{positions:{},viewport:{x:0,y:0,zoom:1},expanded:[],panel:{...card,width:99999}}));
     const view=structuredClone(f.book.review!.view);reviews=new Reviews(f.store,async()=>{throw new Error('offline');},()=>{});reviews.start(f.book.id,true,true);await until(()=>f.book.review?.status==='error');assert.deepEqual(f.book.review!.graph,old);assert.deepEqual(f.book.review!.view,view);
   }finally{await reviews.stop();f.cleanup();}
 });

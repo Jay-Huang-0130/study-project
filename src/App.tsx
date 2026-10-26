@@ -7,7 +7,7 @@ import {Markdown} from './Markdown';
 import {ConceptReview} from './ConceptReview';
 import {LibraryHome} from './LibraryHome';
 
-const emptyState: AppState = { books: [], auth: { connected: false, label: '正在確認連線', models: [] }, paused: false, model: '', activity: '準備學習環境',version:'',update:{status:'unsupported'},aiConcurrency:4,pdfWorkers:2,lessonDetail:'concise',uiScale:100,readingFontSize:13,runtime:{activeLessons:0,indexing:false,modelActive:0,modelQueued:0,pdfWorkers:0} };
+const emptyState: AppState = { books: [], groups:[], auth: { connected: false, label: '正在確認連線', models: [] }, paused: false, model: '', activity: '準備學習環境',version:'',update:{status:'unsupported'},aiConcurrency:4,pdfWorkers:2,lessonDetail:'concise',uiScale:100,readingFontSize:13,runtime:{activeLessons:0,indexing:false,modelActive:0,modelQueued:0,pdfWorkers:0} };
 export function App() {
   const [state,setState] = useState<AppState>(emptyState);
   const [outlines,setOutlines]=useState<Record<string,OutlineEntry[]>>({});
@@ -17,6 +17,7 @@ export function App() {
   const [error,setError] = useState('');
   const [settings,setSettings] = useState(false);
   const [libraryOpen,setLibraryOpen] = useState(false);
+  const [libraryGroup,setLibraryGroup]=useState('all');
   const [deleteBook,setDeleteBook] = useState<BookSummary>();
   const [deletingBook,setDeletingBook] = useState(false);
   const libraryRef=useRef<HTMLElement>(null);
@@ -56,7 +57,8 @@ export function App() {
     setLibraryOpen(false);
   };
   const goHome=()=>{activeRef.current=undefined;setActiveId(undefined);setMode('read');setQuestion('');setLibraryOpen(false);setState(s=>({...s,active:undefined}));void refresh();};
-  const importPDF = () => run(async () => { const id = await window.study.importPDF(); if (id) await select(id); });
+  const importIntoGroup=(groupId?:string)=>run(async()=>{const id=await window.study.importPDF();if(id){if(groupId)await window.study.moveBooks([id],groupId);await select(id);}});
+  const importPDF=()=>importIntoGroup();
   const removeBook=async()=>{
     if(!deleteBook||deletingBook)return;
     const id=deleteBook.id;setDeletingBook(true);
@@ -105,7 +107,7 @@ export function App() {
       <div className="library-heading"><div className="brand"><div className="brand-icon"><BookOpen size={21}/></div><span>study<span className="brand-dot">.</span><small>你的讀書工作室</small></span></div><button className="icon-button" aria-label="關閉教材書庫" onClick={()=>{setLibraryOpen(false);launcherRef.current?.focus();}}><X size={18}/></button></div>
       <button className="import-button" onClick={importPDF}><Plus size={17}/> 匯入 PDF 教材</button>
       <div className="sidebar-label">我的教材 <span>{state.books.length}</span></div>
-      <nav className="library">{state.books.length ? state.books.map(b => <div className={`book-row ${activeId===b.id?'selected':''}`} key={b.id}>
+      <select className="library-group-filter" aria-label="書庫群組" value={libraryGroup} onChange={e=>setLibraryGroup(e.target.value)}><option value="all">全部教材</option><option value="ungrouped">未分組</option>{state.groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select><nav className="library">{state.books.length ? state.books.filter(b=>libraryGroup==='all'||(libraryGroup==='ungrouped'?!b.groupId:b.groupId===libraryGroup)).map(b => <div className={`book-row ${activeId===b.id?'selected':''}`} key={b.id}>
         <button className={`book-card ${activeId === b.id ? 'selected' : ''}`} onClick={() => void run(() => select(b.id))}>
           <FileText size={18}/><span><strong>{b.name.replace(/\.pdf$/i,'')}</strong><small>{b.count ? `${b.count} 頁 · 已備妥 ${b.completed} 頁` : '正在解析教材'}</small><small className={`book-generation-status ${b.generationState}`} title={b.pauseReason}><i/>{b.generationState==='running'&&activeId!==b.id?'背景生成中':generationLabel(b.generationState)}</small><i><b style={{width:`${b.count ? b.completed/b.count*100 : 0}%`}}/></i></span>
         </button><div className="book-actions">{b.generationState!=='complete'&&<button className="book-generation-toggle" aria-label={`${b.generationPaused?(b.completed>0?'繼續':'開始'):'暫停'}教材 ${b.name}`} title={b.pauseReason} onClick={()=>void run(()=>window.study.generation(b.id,!b.generationPaused))}>{b.generationPaused?<Play size={12}/>:<Pause size={12}/>}<span>{b.generationPaused?(b.completed>0?'繼續':'開始'):'暫停'}</span></button>}<button className="delete-book" aria-label={`刪除教材 ${b.name}`} title={`刪除 ${b.name} 與學習紀錄`} onClick={()=>setDeleteBook(b)}><Trash2 size={14}/><span>刪除</span></button></div>
@@ -113,10 +115,10 @@ export function App() {
       <div className="sidebar-note"><GraduationCap size={20}/><p>照自己的步調學習。<br/><span>點選教材後，書庫會自動收起。</span></p></div>
       <button className="connection" onClick={() => {setSettings(true);setLibraryOpen(false);}}><i className={state.auth.connected ? 'online' : ''}/><span>{state.auth.label}</span><Settings2 size={15}/></button>
     </aside>}
-    <main className="workspace">
+    <main className={`workspace ${book&&mode==='review'?'map-workspace':''}`}>
       <header className="topbar"><div className="breadcrumb"><button className="home-link" aria-label="返回教材首頁" disabled={!book} onClick={goHome}>讀書工作室</button> <ChevronRight size={13}/><strong>{book ? book.name : '開始學習'}</strong></div><div className="header-actions">{['downloading','ready','error'].includes(state.update.status)&&<button className="update-notice text-button" onClick={()=>setSettings(true)}>{state.update.status==='ready'?'新版已備妥':state.update.status==='error'?'更新需重試':`更新下載 ${state.update.percent??0}%`}</button>}<button className="icon-button" title="切換全螢幕" aria-label="切換全螢幕" onClick={() => void run(() => window.study.fullscreen())}><Maximize2 size={17}/></button><button className="icon-button" title="設定" aria-label="設定" onClick={() => setSettings(true)}><Settings2 size={18}/></button></div></header>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="關閉錯誤"><X size={16}/></button></div>}
-      {!book ? (state.books.length?<LibraryHome books={state.books} onSelect={id=>void run(()=>select(id))} onImport={importPDF} onDelete={setDeleteBook}/>:<section className="welcome"><div className="welcome-symbol"><BookOpen size={38}/></div><span className="eyebrow">A LITTLE UNDERSTANDING, EVERY DAY</span><h1>打開教材，<br/>讓理解慢慢發生。</h1><p>原文在左，講解在右。<br/>自由翻閱、隨時提問，接著上次讀到的地方繼續。</p><button className="primary-button" onClick={importPDF}><Plus size={18}/> 選擇 PDF 教材 <ArrowRight size={17}/></button><div className="welcome-details"><span><FileText size={16}/>英文講義與圖表</span><span><Sparkles size={16}/>逐頁中文講解</span><span><Check size={16}/>學習紀錄保存在本機</span></div>{!state.auth.connected && <button className="text-button" onClick={() => setSettings(true)}>先連接 ChatGPT 帳號 <ArrowRight size={14}/></button>}</section>) : <>
+      {!book ? ((state.books.length||state.groups.length)?<LibraryHome books={state.books} groups={state.groups} onSelect={id=>void run(()=>select(id))} onImport={group=>void importIntoGroup(group)} onDelete={setDeleteBook} onError={setError}/>:<section className="welcome"><div className="welcome-symbol"><BookOpen size={38}/></div><span className="eyebrow">A LITTLE UNDERSTANDING, EVERY DAY</span><h1>打開教材，<br/>讓理解慢慢發生。</h1><p>原文在左，講解在右。<br/>自由翻閱、隨時提問，接著上次讀到的地方繼續。</p><button className="primary-button" onClick={importPDF}><Plus size={18}/> 選擇 PDF 教材 <ArrowRight size={17}/></button><div className="welcome-details"><span><FileText size={16}/>英文講義與圖表</span><span><Sparkles size={16}/>逐頁中文講解</span><span><Check size={16}/>學習紀錄保存在本機</span></div>{!state.auth.connected && <button className="text-button" onClick={() => setSettings(true)}>先連接 ChatGPT 帳號 <ArrowRight size={14}/></button>}</section>) : <>
         <div className="session-bar"><div><span className="eyebrow">READ AT YOUR OWN PACE</span><h1>{book.name.replace(/\.pdf$/i,'')}</h1></div><div className="session-actions"><div className="mode-switch" role="group" aria-label="工作區模式"><button className={mode==='read'?'active':''} onClick={()=>setMode('read')}>教材閱讀</button><button className={mode==='review'?'active':''} onClick={()=>setMode('review')}>概念複習</button></div><div className="session-progress"><span><b>{complete}</b> / {book.count || '—'} 頁講解已備妥</span><div className="progress-track"><i style={{width:`${book.count ? complete/book.count*100 : 0}%`}}/></div></div></div></div>
         {mode==='review'?<ConceptReview key={book.id} book={book} connected={state.auth.connected} onSource={value=>{navigate(value);setMode('read');}} onError={message=>setError(message)}/>:<>
         <div className="split-view" style={{gridTemplateColumns:`minmax(0, ${ratio}fr) 9px minmax(0, ${100-ratio}fr)`}}>

@@ -93,7 +93,11 @@ function registerIPC() {
     if (event.sender !== win?.webContents || event.senderFrame !== win?.webContents.mainFrame) throw new Error('不允許此來源');
     return fn(...args);
   });
-  handle('study:state', (id?: string): AppState => ({ books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? reviews.snapshot(store.book(id)) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
+  handle('study:state', (id?: string): AppState => ({ groups:store.library.groups, books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? reviews.snapshot(store.book(id)) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
+  handle('study:createGroup',(name:string)=>{const id=store.createGroup(name);changed();return id;});
+  handle('study:renameGroup',(id:string,name:string)=>{store.renameGroup(id,name);changed();});
+  handle('study:deleteGroup',(id:string)=>{store.deleteGroup(id);changed();});
+  handle('study:moveBooks',(ids:string[],groupId:string|null)=>{store.moveBooks(ids,groupId);changed();});
   handle('study:import', async () => {
     const choice = await dialog.showOpenDialog(win!, { title: '選擇你的教材', filters: [{ name: 'PDF 教材', extensions: ['pdf'] }], properties: ['openFile'] });
     if (choice.canceled) return null;

@@ -1,0 +1,24 @@
+import {useEffect,useRef,useState,type CSSProperties,type ReactNode,type PointerEvent} from 'react';
+import {ChevronDown,ChevronUp,Maximize2,Minimize2,Grip} from 'lucide-react';
+import {clampPanel,type InfoPanel} from './panel-layout';
+
+export function FloatingInfo({value,onChange,onCommit,children}:{value:InfoPanel;onChange:(value:InfoPanel)=>void;onCommit:(value:InfoPanel)=>void;children:ReactNode}){
+ const element=useRef<HTMLElement>(null),latest=useRef(value),bounds=useRef({width:1200,height:700}),initial=useRef(true),restore=useRef<InfoPanel|undefined>(undefined);latest.current=value;
+ useEffect(()=>{const parent=element.current?.parentElement;if(!parent)return;const resize=()=>{bounds.current={width:parent.clientWidth,height:parent.clientHeight};const next=clampPanel(initial.current&&value.x<0?{...latest.current,x:parent.clientWidth-latest.current.width-20,y:72}:latest.current,bounds.current);initial.current=false;latest.current=next;onChange(next);};const observer=new ResizeObserver(resize);observer.observe(parent);resize();return()=>observer.disconnect();},[]);
+ const update=(next:InfoPanel,commit=true)=>{const safe=clampPanel(next,bounds.current);latest.current=safe;onChange(safe);if(commit)onCommit(safe);};
+ const gesture=(event:PointerEvent<HTMLElement>,kind:'move'|'resize')=>{
+  if(kind==='move'&&(event.target as HTMLElement).closest('button,input,select'))return;event.preventDefault();event.stopPropagation();const target=event.currentTarget,start={...latest.current},x=event.clientX,y=event.clientY;target.setPointerCapture(event.pointerId);
+  const move=(e:globalThis.PointerEvent)=>update(kind==='move'?{...start,x:start.x+e.clientX-x,y:start.y+e.clientY-y}:{...start,width:start.width+e.clientX-x,height:start.height+e.clientY-y},false);
+  const stop=()=>{target.removeEventListener('pointermove',move);target.removeEventListener('pointerup',stop);target.removeEventListener('pointercancel',stop);onCommit(latest.current);};target.addEventListener('pointermove',move);target.addEventListener('pointerup',stop,{once:true});target.addEventListener('pointercancel',stop,{once:true});
+ };
+ return <section ref={element} className={`floating-info ${value.open?'':'collapsed'}`} aria-label="概念資訊卡" style={{left:value.x<0?undefined:value.x,right:value.x<0?20:undefined,top:value.y,width:value.width,height:value.open?value.height:48,'--reading-font':`${value.fontSize}px`} as CSSProperties}>
+  <header className="floating-info-header" onPointerDown={e=>gesture(e,'move')}><Grip size={15}/><strong>概念詳情</strong><div><button aria-label="縮小資訊卡文字" disabled={value.fontSize<=12} onClick={()=>update({...value,fontSize:value.fontSize-1})}>A−</button><button aria-label="放大資訊卡文字" disabled={value.fontSize>=26} onClick={()=>update({...value,fontSize:value.fontSize+1})}>A＋</button><button aria-label={restore.current?'還原資訊卡':'放大資訊卡'} onClick={()=>{if(restore.current){const previous=restore.current;restore.current=undefined;update(previous);}else{restore.current={...value};update({...value,x:12,y:12,width:bounds.current.width-24,height:bounds.current.height-24,open:true});}}}>{restore.current?<Minimize2 size={14}/>:<Maximize2 size={14}/>}</button><button aria-label={value.open?'收起概念詳情':'展開概念詳情'} onClick={()=>update({...value,open:!value.open})}>{value.open?<ChevronDown size={16}/>:<ChevronUp size={16}/>}</button></div></header>
+  {value.open&&<>{children}<button className="info-resize-handle" aria-label="調整資訊卡大小" onPointerDown={e=>gesture(e,'resize')} onKeyDown={e=>{if(!e.key.startsWith('Arrow'))return;e.preventDefault();update({...value,width:value.width+(e.key==='ArrowRight'?24:e.key==='ArrowLeft'?-24:0),height:value.height+(e.key==='ArrowDown'?24:e.key==='ArrowUp'?-24:0)});}}><Grip size={15}/></button></>}
+ </section>;
+}
+
+export function FitFormula({children}:{children:ReactNode}){
+ const outer=useRef<HTMLDivElement>(null),inner=useRef<HTMLDivElement>(null);const [fit,setFit]=useState(true),[layout,setLayout]=useState({scale:1,height:60});
+ useEffect(()=>{const parent=outer.current,content=inner.current;if(!parent||!content)return;const measure=()=>{const scale=fit?Math.min(1,Math.max(1,parent.clientWidth-4)/Math.max(1,content.scrollWidth)):1;setLayout(previous=>previous.scale===scale&&previous.height===Math.ceil(content.offsetHeight*scale)?previous:{scale,height:Math.ceil(content.offsetHeight*scale)});};const observer=new ResizeObserver(measure);observer.observe(parent);observer.observe(content);measure();return()=>observer.disconnect();},[fit,children]);
+ return <><button className="formula-fit-toggle" onClick={()=>setFit(v=>!v)}>{fit?'公式原始大小':'公式適合寬度'}</button><div ref={outer} className={`review-formula ${fit?'fit-formula':''}`} style={fit?{height:layout.height+8}:undefined}><div ref={inner} className="formula-natural" style={fit?{transform:`scale(${layout.scale})`,transformOrigin:'left top'}:undefined}>{children}</div></div></>;
+}

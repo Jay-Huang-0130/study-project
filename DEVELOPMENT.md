@@ -1,6 +1,6 @@
 # 開發與維護流程
 
-基準：**0.8.3**；更新日期：**2026-10-26**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
+基準：**0.9.0**；更新日期：**2026-10-26**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
 
 ## 1. 開始工作
 
@@ -42,7 +42,7 @@ npm run dev
 | PDF / 介面 | `npm run check`、隔離 Electron 操作 | 多教材快速切換、縮放、重載、公式與畫布生命週期 |
 | 發行 / 更新 | 編譯、打包、真正 installer 更新測試 | 一般退出不安裝、明確安裝、保存路徑、重開與公開 feed |
 
-`npm run check:codex` 只驗證獨立元件初始化及模型目錄，不代表登入資格、額度或教學品質。66 項為 0.8.3 現有測試紀錄；目前證據見 [TESTING](docs/TESTING.md)。
+`npm run check:codex` 只驗證獨立元件初始化及模型目錄，不代表登入資格、額度或教學品質。70 項為 0.9.0 現有測試紀錄；目前證據見 [TESTING](docs/TESTING.md)。
 
 ## 5. 打包與發行
 
@@ -76,3 +76,5 @@ npm run package
 不提交 OAuth token、keyring、API Key、`.env`、個人書庫、私人 PDF 或原始 stderr。fixture 應自行建立且可公開。書庫的本機保存不等於加密，也不代表生成不傳送資料到模型服務。
 
 每次結束在 DEVLOG 交代做了什麼、如何驗證、限制與下一步。用 `git status --short --branch`、`git log -1 --oneline` 及遠端提交識別確認交付狀態。
+
+0.9.0：科目群組實作見 Store.library、LibraryHome 與 GROUPS 文件；浮動詳情見 FloatingInfo、panel-layout、ConceptReview。請避免群組操作呼叫 Engine.wake，或將分組／卡片大小加入來源指紋。

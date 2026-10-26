@@ -116,6 +116,8 @@ export class Reviews{
     const ids=new Set(book.review.graph.nodes.map(n=>n.id)),finite=(n:number)=>Number.isFinite(n)&&Math.abs(n)<=1e7;
     if(!view||!view.positions||Object.keys(view.positions).length>100||!view.viewport||!finite(view.viewport.x)||!finite(view.viewport.y)||!Number.isFinite(view.viewport.zoom)||view.viewport.zoom<.05||view.viewport.zoom>4||!Array.isArray(view.expanded)||view.expanded.length>100||view.expanded.some(id=>!ids.has(id))||(view.selected!==undefined&&!ids.has(view.selected)))throw new Error('畫布位置無效');
     for(const [id,p] of Object.entries(view.positions))if(!ids.has(id)||!p||!finite(p.x)||!finite(p.y))throw new Error('節點位置無效');
+    if(view.toolsOpen!==undefined&&typeof view.toolsOpen!=='boolean')throw new Error('工具面板設定無效');
+    const p=view.panel;if(p!==undefined&&(!p||(!finite(p.x)||!finite(p.y)||!Number.isFinite(p.width)||p.width<280||p.width>10000||!Number.isFinite(p.height)||p.height<160||p.height>10000||!Number.isInteger(p.fontSize)||p.fontSize<12||p.fontSize>26||typeof p.open!=='boolean')))throw new Error('資訊卡位置與大小無效');
     book.review.view=structuredClone(view);this.save(book);
   }
   private save(book:Book){this.store.save(book);this.changed();}

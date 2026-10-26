@@ -21,14 +21,19 @@ export type ConceptKind='topic'|'term'|'concept'|'formula'|'method';
 export interface ConceptNode { id:string; kind:ConceptKind; label:string; fullName:string; summary:string; detail:string; formula:string; symbols:{symbol:string;meaning:string;unit:string}[]; conditions:string[]; sources:ReviewSource[] }
 export interface ConceptEdge { id:string; source:string; target:string; relation:'contains'|'defines'|'uses'|'compares'|'depends'|'example'; label:string; detail:string; sources:ReviewSource[] }
 export interface ConceptGraph { title:string; rootId:string; nodes:ConceptNode[]; edges:ConceptEdge[] }
-export interface ReviewView { positions:Record<string,{x:number;y:number}>; viewport:{x:number;y:number;zoom:number}; expanded:string[]; selected?:string }
+export interface ReviewView { positions:Record<string,{x:number;y:number}>; viewport:{x:number;y:number;zoom:number}; expanded:string[]; selected?:string; panel?:{x:number;y:number;width:number;height:number;fontSize:number;open:boolean}; toolsOpen?:boolean }
 export interface ReviewRecord { status:'running'|'done'|'paused'|'error'; stage:string; completedChunks:number; totalChunks:number; sourceVersion:string; model:string; chunks:ConceptGraph[]; mergeLevels?:ConceptGraph[][]; completedMerges?:number; totalMerges?:number; phase?:'extract'|'merge'|'finalize'|'done'; validationFailure?:{stage:string;error:string;attempts:number;at:string;output?:string}; request?:{state:'queued'|'running'|'receiving';queuedAt:string;startedAt?:string;lastResponseAt?:string}; error?:string; graph?:ConceptGraph & {generationId:string;sourceVersion:string;createdAt:string;model:string}; view?:ReviewView }
-export interface BookSummary { id: string; name: string; count: number; currentPage: number; completed: number; createdAt: string; generationPaused:boolean; generationState:GenerationState; pauseReason?:string }
+export interface LibraryGroup {id:string;name:string}
+export interface BookSummary {groupId?:string; id: string; name: string; count: number; currentPage: number; completed: number; createdAt: string; generationPaused:boolean; generationState:GenerationState; pauseReason?:string }
 export interface ModelOption { id: string; name: string; isDefault: boolean }
 export interface AuthState { connected: boolean; label: string; error?: string; models: ModelOption[] }
 export interface UpdateState { status:'unsupported'|'idle'|'checking'|'current'|'available'|'downloading'|'ready'|'installing'|'error'; version?:string; percent?:number; error?:string }
-export interface AppState extends StudySettings { books: BookSummary[]; active?: Book; auth: AuthState; activity: string; version:string; runtime:RuntimeStatus; update:UpdateState }
+export interface AppState extends StudySettings { books: BookSummary[]; groups:LibraryGroup[]; active?: Book; auth: AuthState; activity: string; version:string; runtime:RuntimeStatus; update:UpdateState }
 export interface StudyAPI {
+  createGroup(name:string):Promise<string>;
+  renameGroup(id:string,name:string):Promise<void>;
+  deleteGroup(id:string):Promise<void>;
+  moveBooks(ids:string[],groupId:string|null):Promise<void>;
   state(id?: string): Promise<AppState>;
   importPDF(): Promise<string | null>;
   navigate(id: string, page: number): Promise<void>;

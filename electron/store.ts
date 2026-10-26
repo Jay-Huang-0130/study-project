@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import {bookComplete} from './book-state';
-import type { Book, BookSummary, StudySettings } from '../src/shared';
+import type { Book, BookSummary, StudySettings, LibraryGroup } from '../src/shared';
 
 export function normalizeSettings(raw:Partial<StudySettings>):StudySettings{
   return {paused:typeof raw.paused==='boolean'?raw.paused:false,model:typeof raw.model==='string'?raw.model:'',
@@ -21,9 +21,19 @@ export function atomicJSON(file: string, value: unknown) {
 }
 export class Store {
   books = new Map<string, Book>();
+  library:{groups:LibraryGroup[];memberships:Record<string,string>}={groups:[],memberships:{}};
   settings:StudySettings=normalizeSettings({});
   constructor(public root: string) {
     mkdirSync(path.join(root, 'books'), { recursive: true });
+    const libraryFile=path.join(root,'library.json');
+    if(existsSync(libraryFile)){
+      const value=JSON.parse(readFileSync(libraryFile,'utf8'));
+      if(!value||!Array.isArray(value.groups)||value.groups.length>200||!value.memberships||typeof value.memberships!=='object'||Array.isArray(value.memberships))throw new Error('教材群組資料格式錯誤');
+      const ids=new Set<string>();
+      for(const group of value.groups){if(!group||typeof group.id!=='string'||!group.id||ids.has(group.id)||typeof group.name!=='string'||!group.name.trim()||[...group.name].length>60)throw new Error('教材群組資料格式錯誤');ids.add(group.id);}
+      for(const [id,group] of Object.entries(value.memberships))if(!/^[a-f0-9]{64}$/.test(id)||typeof group!=='string'||!ids.has(group))throw new Error('教材群組歸屬格式錯誤');
+      this.library=value;
+    }
     const settingsFile = path.join(root, 'settings.json');
     if (existsSync(settingsFile)) this.settings = normalizeSettings(JSON.parse(readFileSync(settingsFile, 'utf8')));
     for (const id of readdirSync(path.join(root, 'books'))) {
@@ -48,6 +58,29 @@ export class Store {
       this.save(book);
     }
   }
+  private saveLibrary(value:typeof this.library){atomicJSON(path.join(this.root,'library.json'),value);this.library=value;}
+  private groupName(name:unknown,except?:string){
+    if(typeof name!=='string'||!name.trim()||[...name.trim()].length>60)throw new Error('群組名稱須為 1–60 字');
+    const normalized=name.trim();if(this.library.groups.some(g=>g.id!==except&&g.name.normalize('NFKC').toLocaleLowerCase()===normalized.normalize('NFKC').toLocaleLowerCase()))throw new Error('已有同名群組');return normalized;
+  }
+  createGroup(name:string){
+    if(this.library.groups.length>=200)throw new Error('群組數量已達上限');const group={id:randomUUID(),name:this.groupName(name)};
+    this.saveLibrary({...this.library,groups:[...this.library.groups,group]});return group.id;
+  }
+  renameGroup(id:string,name:string){
+    if(!this.library.groups.some(g=>g.id===id))throw new Error('找不到群組');const clean=this.groupName(name,id);
+    this.saveLibrary({...this.library,groups:this.library.groups.map(g=>g.id===id?{...g,name:clean}:g)});
+  }
+  deleteGroup(id:string){
+    if(!this.library.groups.some(g=>g.id===id))throw new Error('找不到群組');
+    this.saveLibrary({groups:this.library.groups.filter(g=>g.id!==id),memberships:Object.fromEntries(Object.entries(this.library.memberships).filter(([,group])=>group!==id))});
+  }
+  moveBooks(ids:string[],groupId:string|null){
+    if(!Array.isArray(ids)||!ids.length||ids.length>1000||ids.some(id=>typeof id!=='string'||!this.books.has(id)))throw new Error('請選擇有效教材');
+    if(groupId!==null&&!this.library.groups.some(g=>g.id===groupId))throw new Error('找不到群組');
+    const memberships={...this.library.memberships};for(const id of ids){if(groupId===null)delete memberships[id];else memberships[id]=groupId;}
+    this.saveLibrary({...this.library,memberships});
+  }
   book(id: string) { const b = this.books.get(id); if (!b) throw new Error('找不到教材'); return b; }
   dir(id: string) { this.book(id); return path.join(this.root, 'books', id); }
   save(book: Book) {
@@ -59,6 +92,7 @@ export class Store {
     this.book(id);
     const target=path.resolve(this.dir(id)),booksRoot=path.resolve(this.root,'books');
     if(!/^[a-f0-9]{64}$/.test(id)||path.dirname(target)!==booksRoot)throw new Error('教材資料位置無效');
+    if(this.library.memberships[id])this.moveBooks([id],null);
     rmSync(target,{recursive:true,force:true});
     this.books.delete(id);
   }
@@ -86,6 +120,6 @@ export class Store {
     this.books.set(id, book); this.save(book); return book;
   }
   summaries(): BookSummary[] {
-    return [...this.books.values()].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(b => ({ id: b.id, name: b.name, count: b.count, currentPage: b.currentPage, createdAt: b.createdAt, completed: b.pages.filter(p => p.status === 'done').length,generationPaused:!!b.generationPaused,pauseReason:b.pauseReason,generationState:b.generationPaused?'paused':'waiting' }));
+    return [...this.books.values()].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(b => ({ groupId:this.library.memberships[b.id], id: b.id, name: b.name, count: b.count, currentPage: b.currentPage, createdAt: b.createdAt, completed: b.pages.filter(p => p.status === 'done').length,generationPaused:!!b.generationPaused,pauseReason:b.pauseReason,generationState:b.generationPaused?'paused':'waiting' }));
   }
 }

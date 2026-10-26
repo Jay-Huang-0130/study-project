@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { StudyAPI } from '../src/shared';
 const api: StudyAPI = {
+  createGroup:name=>ipcRenderer.invoke('study:createGroup',name),
+  renameGroup:(id,name)=>ipcRenderer.invoke('study:renameGroup',id,name),
+  deleteGroup:id=>ipcRenderer.invoke('study:deleteGroup',id),
+  moveBooks:(ids,group)=>ipcRenderer.invoke('study:moveBooks',ids,group),
   state: id => ipcRenderer.invoke('study:state',id),
   importPDF: () => ipcRenderer.invoke('study:import'),
   navigate: (id,n) => ipcRenderer.invoke('study:navigate',id,n),

@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.8.3**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.9.0**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -53,6 +53,7 @@ Renderer 啟用 context isolation、停用 Node integration 並使用 sandbox。
 
 ```text
 <library>/
+├── library.json        # 群組及教材歸屬（可選）
 ├── settings.json
 └── books/<PDF SHA-256>/
     ├── source.pdf
@@ -142,8 +143,12 @@ Reviews 經 Engine.generateReview 使用同一模型容量（優先級 2），�
 
 ## 閱讀呈現擴充（0.8.1）
 
-LibraryHome 使用既有 BookSummary，無新 IPC 或 AI 觸發。PDFViewer 同一份 viewport 同時建立 canvas 與 PDF.js TextLayer；皆完成且作業仍有效才提交，換頁清除舊文字層，取消時中斷兩者。滾輪只綁定 PDF 容器，PDFWheelPager 管理邊界與手勢。Markdown 顯示前以 normalizeMath 修復分隔符，原始 book.json 不變。相關檔案與限制見 [READING](READING.md)。
+LibraryHome 使用 BookSummary 與 groups；群組 IPC 僅更新本機管理資料，不觸發 AI。PDFViewer 同一份 viewport 同時建立 canvas 與 PDF.js TextLayer；皆完成且作業仍有效才提交，換頁清除舊文字層，取消時中斷兩者。滾輪只綁定 PDF 容器，PDFWheelPager 管理邊界與手勢。Markdown 顯示前以 normalizeMath 修復分隔符，原始 book.json 不變。相關檔案與限制見 [READING](READING.md)。
 
 ## 合併驗證恢復（0.8.3）
 
 Reviews 在整合前隔離各子圖局部 ID，收回輸出後先去除完全相同的重複紀錄，再做嚴格驗證。checkedGraph 只對驗證錯誤最多補發一次修正；validationFailure 保留本組錯誤與有限大小的無效輸出，不影響成功快取。模型額度與網路錯誤仍由使用者手動處理。
+
+## 0.9.0 群組與浮動地圖
+
+群組資料由 Store 以 library.json 原子保存，透過四個受信任 IPC 管理；不寫入每本 book.json，不影響來源指紋。詳見 [GROUPS](GROUPS.md)。ReviewView 新增可選 panel 與 toolsOpen；舊圖沿用預設位置與收合工具。FloatingInfo 使用 Pointer Capture 拖移／拉伸，ResizeObserver 限制於畫布內；FitFormula 只縮放顯示，保留原 LaTeX。保存欄位有有限數值及尺寸驗證，畫布仍存於原教材。
