@@ -9,6 +9,7 @@ import { atomicJSON } from './store';
 import { Store } from './store';
 import { CodexClient } from './codex';
 import { Engine } from './engine';
+import {Reviews} from './review';
 import type { AppState, AuthState, Page, StudySettings } from '../src/shared';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'study', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
@@ -19,6 +20,7 @@ let win: BrowserWindow | undefined;
 let store: Store;
 let client: CodexClient;
 let engine: Engine;
+let reviews:Reviews;
 let updates:Updates;
 let auth: AuthState = { connected: false, label: '尚未登入', models: [] };
 const workers = new Map<string, PDFLoader>();
@@ -48,11 +50,11 @@ function readAuth():Promise<void> {
       const model = auth.models.find(m => m.isDefault) ?? auth.models[0];
       if (model) store.updateSettings({ model: model.id });
     }
-    if(!connected&&engine.authenticated)engine.connectionLost('帳號已登出，請重新登入。');
+    if(!connected){reviews?.cancelAll('帳號未連線，等待重新登入後手動繼續');if(engine.authenticated)engine.connectionLost('帳號已登出，請重新登入。');}
     engine.authenticated = connected; changed(); engine.wake();
   } catch (e) {
     auth = { ...auth, connected: false, label: '連線需要處理', error: e instanceof Error ? e.message : String(e) };
-    engine.connectionLost(auth.error||'連線失敗'); changed();
+    reviews?.cancelAll('模型連線中斷，等待手動繼續');engine.connectionLost(auth.error||'連線失敗'); changed();
   }
   })();
   const request=authReading;void request.finally(()=>{if(authReading===request)authReading=undefined;});return request;
@@ -91,7 +93,7 @@ function registerIPC() {
     if (event.sender !== win?.webContents || event.senderFrame !== win?.webContents.mainFrame) throw new Error('不允許此來源');
     return fn(...args);
   });
-  handle('study:state', (id?: string): AppState => ({ books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? store.book(id) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
+  handle('study:state', (id?: string): AppState => ({ books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? reviews.snapshot(store.book(id)) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
   handle('study:import', async () => {
     const choice = await dialog.showOpenDialog(win!, { title: '選擇你的教材', filters: [{ name: 'PDF 教材', extensions: ['pdf'] }], properties: ['openFile'] });
     if (choice.canceled) return null;
@@ -138,7 +140,7 @@ function registerIPC() {
     changed();
   });
   handle('study:retry', async(id: string, value?: number) => {
-    const b = store.book(id);
+    const b = store.book(id);reviews.cancel(id,'教材正在重新講解，請完成後重建概念圖');
     if (value !== undefined) { const p = b.pages[pageNumber(id,value)-1]; if (p.status === 'running') return; p.status = 'pending'; p.error = undefined; }
     else {
       if (b.extraction === 'error' || b.extraction === 'pending') extract(id);
@@ -173,6 +175,9 @@ function registerIPC() {
   handle('study:dataFolder', () => shell.openPath(store.root));
   handle('study:checkUpdate',()=>updates.check());
   handle('study:installUpdate',()=>updates.install());
+  handle('study:generateReview',(id:string,restart=false)=>{if(typeof restart!=='boolean')throw new Error('生成選項無效');reviews.start(id,engine.authenticated,restart);});
+  handle('study:cancelReview',(id:string)=>{store.book(id);reviews.cancel(id);});
+  handle('study:reviewView',(id:string,view:any)=>reviews.saveView(id,view));
 }
 
 app.whenReady().then(async () => {
@@ -194,14 +199,15 @@ app.whenReady().then(async () => {
     streams.set(`${event.bookId}:${event.page}:${event.messageId??'lesson'}`,event);
     if(streamTimer)return;
     streamTimer=setTimeout(()=>{streamTimer=undefined;if(win&&!win.isDestroyed())for(const value of streams.values())win.webContents.send('study:delta',value);streams.clear();},100);
-  },book=>{void pausePDF(book.id);});
+  },book=>{reviews?.cancel(book.id);void pausePDF(book.id);});
+  reviews=new Reviews(store,(...args)=>engine.generateReview(...args),changed);
   client.on('notification', (method: string, params: any) => {
     if (method === 'account/updated' || method === 'account/login/completed') {
       if (method === 'account/login/completed' && !params.success) { auth.error = '登入未完成，請重新登入。'; changed(); }
       else void readAuth();
     }
   });
-  client.on('connectionError', (message: string) => { auth = { ...auth, connected: false, error: message, label: '模型已中斷' }; engine.connectionLost(message); changed(); });
+  client.on('connectionError', (message: string) => { auth = { ...auth, connected: false, error: message, label: '模型已中斷' }; reviews.cancelAll('模型連線中斷，等待手動繼續');engine.connectionLost(message); changed(); });
   protocol.handle('study', request => {
     const url = new URL(request.url);
     const match = url.pathname.match(/^\/([a-f0-9]{64})\/(source\.pdf|p[1-9]\d*\.jpg)$/);
@@ -233,11 +239,11 @@ let shuttingDown = false;
 let stopping:Promise<void>|undefined;
 function stopResources():Promise<void>{
   if(stopping)return stopping;
-  engine?.stop();
+  reviews?.cancelAll('程式已關閉，等待手動繼續');engine?.stop();
   for(const [id,timer] of saveTimers){clearTimeout(timer);store.save(store.book(id));}saveTimers.clear();
   for(const id of workers.keys()){const b=store.book(id);b.extraction='pending';store.save(b);}
   const cleanup:Promise<unknown>[]=[...workers.values()].map(w=>w.stop());
-  cleanup.push(...stoppingPDF.values());if(client)cleanup.push(client.close());
+  cleanup.push(...stoppingPDF.values());if(reviews)cleanup.push(reviews.stop());if(client)cleanup.push(client.close());
   stopping=Promise.allSettled(cleanup).then(()=>{});return stopping;
 }
 app.on('before-quit',event=>{

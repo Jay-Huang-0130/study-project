@@ -33,6 +33,7 @@ export class Store {
       const book: Book = JSON.parse(readFileSync(file, 'utf8'));
       if (book.id !== id || !Array.isArray(book.pages)) throw new Error(`教材資料格式錯誤：${id}`);
       book.generationStarted=false;
+      if(book.review?.status==='running'){book.review.status='paused';book.review.stage='上次生成已中斷，等待手動繼續';}
       if (book.mapStatus === 'running') book.mapStatus = 'pending';
       if (book.extraction === 'running') book.extraction = 'pending';
       for (const page of book.pages) {

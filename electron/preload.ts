@@ -18,6 +18,9 @@ const api: StudyAPI = {
   dataFolder: () => ipcRenderer.invoke('study:dataFolder'),
   checkUpdate:()=>ipcRenderer.invoke('study:checkUpdate'),
   installUpdate:()=>ipcRenderer.invoke('study:installUpdate'),
+  generateReview:(id,restart)=>ipcRenderer.invoke('study:generateReview',id,restart),
+  cancelReview:id=>ipcRenderer.invoke('study:cancelReview',id),
+  saveReviewView:(id,view)=>ipcRenderer.invoke('study:reviewView',id,view),
   onChange: callback => { const handler = () => callback(); ipcRenderer.on('study:change',handler); return () => ipcRenderer.removeListener('study:change',handler); },
   onDelta: callback => { const handler = (_: unknown, value: Parameters<Parameters<StudyAPI['onDelta']>[0]>[0]) => callback(value); ipcRenderer.on('study:delta',handler); return () => ipcRenderer.removeListener('study:delta',handler); },
 };

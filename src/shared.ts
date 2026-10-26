@@ -13,8 +13,16 @@ export interface Book {
   extraction: Status; extractionError?: string; extracted: number; textReady?: boolean;
   mapStatus: Status; mapError?: string; mapChunks: PageMap[][]; map?: BookMap;
   generationPaused?:boolean; pauseReason?:string; generationStarted?:boolean;
+  review?:ReviewRecord; reviewStale?:boolean;
   pages: Page[];
 }
+export interface ReviewSource { page:number; kind:'text'|'visual'; quote:string }
+export type ConceptKind='topic'|'term'|'concept'|'formula'|'method';
+export interface ConceptNode { id:string; kind:ConceptKind; label:string; fullName:string; summary:string; detail:string; formula:string; symbols:{symbol:string;meaning:string;unit:string}[]; conditions:string[]; sources:ReviewSource[] }
+export interface ConceptEdge { id:string; source:string; target:string; relation:'contains'|'defines'|'uses'|'compares'|'depends'|'example'; label:string; detail:string; sources:ReviewSource[] }
+export interface ConceptGraph { title:string; rootId:string; nodes:ConceptNode[]; edges:ConceptEdge[] }
+export interface ReviewView { positions:Record<string,{x:number;y:number}>; viewport:{x:number;y:number;zoom:number}; expanded:string[]; selected?:string }
+export interface ReviewRecord { status:'running'|'done'|'paused'|'error'; stage:string; completedChunks:number; totalChunks:number; sourceVersion:string; model:string; chunks:ConceptGraph[]; error?:string; graph?:ConceptGraph & {generationId:string;sourceVersion:string;createdAt:string;model:string}; view?:ReviewView }
 export interface BookSummary { id: string; name: string; count: number; currentPage: number; completed: number; createdAt: string; generationPaused:boolean; generationState:GenerationState; pauseReason?:string }
 export interface ModelOption { id: string; name: string; isDefault: boolean }
 export interface AuthState { connected: boolean; label: string; error?: string; models: ModelOption[] }
@@ -38,6 +46,9 @@ export interface StudyAPI {
   dataFolder(): Promise<void>;
   checkUpdate():Promise<void>;
   installUpdate():Promise<void>;
+  generateReview(id:string,restart?:boolean):Promise<void>;
+  cancelReview(id:string):Promise<void>;
+  saveReviewView(id:string,view:ReviewView):Promise<void>;
   onChange(callback: () => void): () => void;
   onDelta(callback: (event: { bookId: string; page: number; messageId?: string; generationId?: string; text: string }) => void): () => void;
 }

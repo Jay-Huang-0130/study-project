@@ -1,6 +1,6 @@
 # 技術文件導覽
 
-基準：**0.7.1**；更新日期：**2026-10-22**。文件以目前程式為準，歷史決策保留在 [DEVLOG](../DEVLOG.md) 與 Git 歷史，不以早期規劃取代現行行為。
+基準：**0.8.0**；更新日期：**2026-10-26**。文件以目前程式為準，歷史決策保留在 [DEVLOG](../DEVLOG.md) 與 Git 歷史，不以早期規劃取代現行行為。
 
 | 你想了解 | 建議閱讀 |
 | --- | --- |
@@ -8,6 +8,7 @@
 | 產品行為與驗收範圍 | [SPEC](../SPEC.md) |
 | 接手程式與開發 | [DEVELOPMENT](../DEVELOPMENT.md) → [ARCHITECTURE](ARCHITECTURE.md) |
 | 理解 Engine 的方法與取捨 | [ENGINE](ENGINE.md) → [PERFORMANCE](PERFORMANCE.md) |
+| 手動概念複習與來源驗證 | [CONCEPT-REVIEW](CONCEPT-REVIEW.md) |
 | 檢查已驗證到哪裡 | [TESTING](TESTING.md) → [DEVLOG](../DEVLOG.md) |
 | 提交修改或回報問題 | [CONTRIBUTING](../CONTRIBUTING.md) |
 
@@ -24,6 +25,7 @@
 | 主題 | 原始碼 |
 | --- | --- |
 | 工作排程與上下文 | [engine.ts](../electron/engine.ts) |
+| 概念複習生成與畫布 | [review.ts](../electron/review.ts)、[ConceptReview.tsx](../src/ConceptReview.tsx) |
 | 有限容量與優先佇列 | [priority-pool.ts](../electron/priority-pool.ts) |
 | 講稿長度與密度 | [lesson-style.ts](../electron/lesson-style.ts) |
 | Provider 協定與取消 | [codex.ts](../electron/codex.ts)、[cancellation.ts](../electron/cancellation.ts) |

@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.7.1**；更新日期：**2026-10-22**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.8.0**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -11,6 +11,8 @@ flowchart TB
     API --> Main[Electron Main：驗證 IPC]
     Main --> Store[Store：教材與設定]
     Main --> Engine[Engine：教材工作與上下文]
+    Main --> Reviews[Reviews：手動概念複習]
+    Reviews --> Engine
     Main --> PDF[每份教材的 PDFLoader]
     PDF --> Workers[Node PDF Worker Threads]
     Engine --> Pool[共用 PriorityPool]
@@ -28,6 +30,8 @@ flowchart TB
 | [Store](../electron/store.ts) | SHA-256 身分、JSON 快照、刪除與啟動恢復 | 跨程序交易或雲端同步 |
 | [PDFLoader](../electron/pdf-loader.ts) | 共享頁面派工、每份教材的 Worker 數量 | 模型並行容量 |
 | [Engine](../electron/engine.ts) | 索引、講稿、互動、暫停、上下文建構 | PDF canvas 顯示與更新下載 |
+| [Reviews](../electron/review.ts) | 全書完成門檻、原頁概念擷取、來源驗證、分層整合、地圖快取 | 自動啟動生成或證明語義正確 |
+| [ConceptReview](../src/ConceptReview.tsx) | React Flow 畫布、Dagre 排版、來源跳頁與畫布保存 | 呼叫 Node 或保管登入資料 |
 | [PriorityPool](../electron/priority-pool.ts) | 實際 Provider 呼叫的共用容量與佇列優先級 | 搶占已開始的遠端請求 |
 | [CodexClient](../electron/codex.ts) | OAuth app-server、模型清單、RPC、串流及中斷 | 共享永久模型對話記憶 |
 | [Updates](../electron/updates.ts) | 檢查、背景下載、明確安裝動作與錯誤狀態 | Windows 程式簽章 |
@@ -131,3 +135,7 @@ Updates controller 收到新版後開始背景下載，由 electron-updater 依 
 - JSON 隨教材、講稿與問答增長，沒有跨程序寫入交易。
 - 問答沒有永久保留容量；先於排隊背景工作不代表能搶占在途請求。
 - 語音、雲端同步、區域框選高亮、成績報表尚未實作。
+
+## 手動概念複習
+
+Reviews 經 Engine.generateReview 使用同一模型容量（優先級 2），保持一般教材生成資格獨立。ReviewRecord、完成圖及 ReviewView 一起存於教材 book.json；啟動時 running 恢復成 paused。原頁每 4 頁 checkpoint，整合圖成功後才替換舊圖；晚到結果以物件身分、來源版本及 AbortSignal 阻擋。完整方法、上限與來源證明邊界見 [CONCEPT-REVIEW](CONCEPT-REVIEW.md)。

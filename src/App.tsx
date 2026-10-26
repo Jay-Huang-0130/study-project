@@ -1,18 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { BookOpen, Plus, ArrowUp, ChevronLeft, ChevronRight, Settings2, Trash2, Maximize2, Pause, Play, Check, CircleHelp, Sparkles, FolderOpen, X, RefreshCw, FileText, ArrowRight, GraduationCap } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
 import type { AppState, Book, BookSummary, Page, LessonDetail, OutlineEntry } from './shared';
 import { PDFViewer } from './PDFViewer';
 import { readingOutline, type ReadingNode } from './reading-outline';
+import {Markdown} from './Markdown';
+import {ConceptReview} from './ConceptReview';
 
-function Markdown({ text, navigate }: { text: string; navigate: (n: number) => void }) {
-  return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm,remarkMath]} rehypePlugins={[rehypeKatex]}
-    components={{ a: ({href,children}) => { const match = href?.match(/^#page=(\d+)$/); return match ? <button className="inline-link" onClick={() => navigate(Number(match[1]))}>{children}</button> : <span>{children}</span>; } }}
-  >{text.replace(/第\s*(\d+)\s*頁/g, '[$&](#page=$1)')}</ReactMarkdown></div>;
-}
 const emptyState: AppState = { books: [], auth: { connected: false, label: '正在確認連線', models: [] }, paused: false, model: '', activity: '準備學習環境',version:'',update:{status:'unsupported'},aiConcurrency:4,pdfWorkers:2,lessonDetail:'concise',uiScale:100,readingFontSize:13,runtime:{activeLessons:0,indexing:false,modelActive:0,modelQueued:0,pdfWorkers:0} };
 export function App() {
   const [state,setState] = useState<AppState>(emptyState);
@@ -39,6 +32,7 @@ export function App() {
   const [zoom,setZoom] = useState(1);
   const [ratio,setRatio] = useState(53);
   const [tab,setTab] = useState<'lesson'|'map'>('lesson');
+  const [mode,setMode]=useState<'read'|'review'>('read');
   const [streams,setStreams] = useState<Record<string,string>>({});
   const [loginOpening,setLoginOpening] = useState(false);
   const [exercise,setExercise] = useState<{start:number;end:number;count:number}>();
@@ -55,7 +49,7 @@ export function App() {
   },[refresh]);
   const run = async (task: () => Promise<unknown>) => { try { await task(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } };
   const select = async (id: string) => {
-    activeRef.current = id; setActiveId(id); setQuestion(''); setTab('lesson');
+    activeRef.current = id; setActiveId(id); setQuestion(''); setTab('lesson');setMode('read');
     const next = await window.study.state(id); setState(next);
     if (next.active?.count) await window.study.navigate(id,next.active.currentPage);
     setLibraryOpen(false);
@@ -81,7 +75,7 @@ export function App() {
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = 0; },[activeId,n,tab]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || settings || deleteBook || libraryOpen) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || settings || deleteBook || libraryOpen || mode==='review') return;
       if (e.key === 'ArrowRight') navigate(n+1); if (e.key === 'ArrowLeft') navigate(n-1);
     }; window.addEventListener('keydown',handler); return () => window.removeEventListener('keydown',handler);
   });
@@ -89,7 +83,7 @@ export function App() {
     if (!book || sending || (kind === 'question' && !question.trim())) return;
     const value = kind === 'exercise' ? '請針對這一頁出兩題，讓我確認是否理解。' : question;
     const id = book.id, target = n;
-    setSending(true); setQuestion(''); setTab('lesson');
+    setSending(true); setQuestion(''); setTab('lesson');setMode('read');
     void run(() => window.study.ask(id,target,value,kind)).finally(() => setSending(false));
   };
   const openLogin = async () => { setLoginOpening(true); await run(() => window.study.login()); setLoginOpening(false); };
@@ -121,7 +115,8 @@ export function App() {
       <header className="topbar"><div className="breadcrumb">讀書工作室 <ChevronRight size={13}/><strong>{book ? book.name : '開始學習'}</strong></div><div className="header-actions">{['downloading','ready','error'].includes(state.update.status)&&<button className="update-notice text-button" onClick={()=>setSettings(true)}>{state.update.status==='ready'?'新版已備妥':state.update.status==='error'?'更新需重試':`更新下載 ${state.update.percent??0}%`}</button>}<button className="icon-button" title="切換全螢幕" aria-label="切換全螢幕" onClick={() => void run(() => window.study.fullscreen())}><Maximize2 size={17}/></button><button className="icon-button" title="設定" aria-label="設定" onClick={() => setSettings(true)}><Settings2 size={18}/></button></div></header>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="關閉錯誤"><X size={16}/></button></div>}
       {!book ? <section className="welcome"><div className="welcome-symbol"><BookOpen size={38}/></div><span className="eyebrow">A LITTLE UNDERSTANDING, EVERY DAY</span><h1>打開教材，<br/>讓理解慢慢發生。</h1><p>原文在左，講解在右。<br/>自由翻閱、隨時提問，接著上次讀到的地方繼續。</p><button className="primary-button" onClick={importPDF}><Plus size={18}/> 選擇 PDF 教材 <ArrowRight size={17}/></button><div className="welcome-details"><span><FileText size={16}/>英文講義與圖表</span><span><Sparkles size={16}/>逐頁中文講解</span><span><Check size={16}/>學習紀錄保存在本機</span></div>{!state.auth.connected && <button className="text-button" onClick={() => setSettings(true)}>先連接 ChatGPT 帳號 <ArrowRight size={14}/></button>}</section> : <>
-        <div className="session-bar"><div><span className="eyebrow">READ AT YOUR OWN PACE</span><h1>{book.name.replace(/\.pdf$/i,'')}</h1></div><div className="session-progress"><span><b>{complete}</b> / {book.count || '—'} 頁講解已備妥</span><div className="progress-track"><i style={{width:`${book.count ? complete/book.count*100 : 0}%`}}/></div></div></div>
+        <div className="session-bar"><div><span className="eyebrow">READ AT YOUR OWN PACE</span><h1>{book.name.replace(/\.pdf$/i,'')}</h1></div><div className="session-actions"><div className="mode-switch" role="group" aria-label="工作區模式"><button className={mode==='read'?'active':''} onClick={()=>setMode('read')}>教材閱讀</button><button className={mode==='review'?'active':''} onClick={()=>setMode('review')}>概念複習</button></div><div className="session-progress"><span><b>{complete}</b> / {book.count || '—'} 頁講解已備妥</span><div className="progress-track"><i style={{width:`${book.count ? complete/book.count*100 : 0}%`}}/></div></div></div></div>
+        {mode==='review'?<ConceptReview key={book.id} book={book} connected={state.auth.connected} onSource={value=>{navigate(value);setMode('read');}} onError={message=>setError(message)}/>:<>
         <div className="split-view" style={{gridTemplateColumns:`minmax(0, ${ratio}fr) 9px minmax(0, ${100-ratio}fr)`}}>
           <section className="pdf-panel"><div className="panel-toolbar"><span className="panel-label"><FileText size={16}/>教材原文</span><div className="zoom-control"><button onClick={() => setZoom(z => Math.max(.5,z-.1))} aria-label="縮小">−</button><span>{Math.round(zoom*100)}%</span><button onClick={() => setZoom(z => Math.min(2,z+.1))} aria-label="放大">＋</button></div></div>
             <PDFViewer key={book.id} id={book.id} page={n} zoom={zoom} onOutline={onOutline}/>
@@ -140,6 +135,7 @@ export function App() {
           </section>
         </div>
         <footer className="statusbar"><span><i className={paused ? 'paused' : ''}/><span className="generation-feedback" title={book.pauseReason}>{state.activity}</span></span><div><span>AI 合計 {state.runtime.modelActive}/{state.aiConcurrency} · PDF {state.runtime.pdfWorkers} 緒</span><span>紀錄保存在本機</span><button disabled={generationState==='complete'&&!paused} title="控制目前這份教材" onClick={() => void run(() => window.study.generation(book.id,!paused))}>{paused ? <Play size={13}/> : <Pause size={13}/>} {paused ? (complete>0||book.mapChunks.length?'繼續生成':'開始生成') : '暫停生成'}</button></div></footer>
+      </> }
       </>}
     </main>
     {deleteBook && <div className="modal-backdrop"><section className="settings-modal delete-book-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-book-title" aria-describedby="delete-book-description"><h2 id="delete-book-title">刪除這份教材？</h2><strong className="delete-book-name">{deleteBook.name}</strong><p id="delete-book-description">會刪除這份教材在書庫中的 PDF 副本、講稿、問答、練習與學習進度，無法復原。原本匯入位置的 PDF 不受影響。</p><div className="dialog-actions"><button className="secondary-button" disabled={deletingBook} autoFocus onClick={()=>setDeleteBook(undefined)}>取消</button><button className="danger-button" disabled={deletingBook} onClick={()=>void removeBook()}>{deletingBook?'正在刪除…':'確認刪除教材'}</button></div></section></div>}
