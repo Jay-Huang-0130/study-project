@@ -18,7 +18,7 @@ git push origin vX.Y.Z
 
 工作流程使用 GitHub 自動提供的 `GITHUB_TOKEN`，僅要求 repository contents 寫入權限；不需要另存個人權杖。打包清單不含本機書庫或 OAuth 資料。自動產生的 release notes 列出提交內容；有需要可在 Releases 編輯成給使用者的更新說明。
 
-版本標籤必須符合 package.json，失敗不發布。修復程式問題請發新版本；若是網路、runner 問題，可重新執行相同標籤的工作流程。支援 workflow_dispatch，但必須選擇版本標籤，不能選 main。
+版本標籤必須符合 package.json，失敗不發布。修復程式問題請發新版本；若是網路、runner 問題，可重新執行相同標籤的工作流程。也支援推送 `release/vX.Y.Z` 發行分支（須與 package.json 相同版本），CI 從該次提交建立版本標籤與發行版；可透過 GitHub 連線建立分支，無需另建個人權杖。workflow_dispatch 僅接受版本標籤或對應發行分支，不能選 main。兩種入口擇一使用。
 
 ## 穩定下載入口
 

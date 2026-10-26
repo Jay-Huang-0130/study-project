@@ -2,6 +2,7 @@ name: Windows Release
 on:
   push:
     tags: ['v*']
+    branches: ['release/v*']
   workflow_dispatch:
 permissions:
   contents: write
@@ -22,8 +23,10 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
-          if ('${{ github.ref_type }}' -ne 'tag' -or '${{ github.ref_name }}' -ne "v$version") {
-            throw 'Choose a vX.Y.Z tag matching package.json.'
+          $isTag = '${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -eq "v$version"
+          $isReleaseBranch = '${{ github.ref_type }}' -eq 'branch' -and '${{ github.ref_name }}' -eq "release/v$version"
+          if (-not ($isTag -or $isReleaseBranch)) {
+            throw 'Choose a vX.Y.Z tag or release/vX.Y.Z branch matching package.json.'
           }
       - run: npm ci
       - run: npm run check
@@ -56,10 +59,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = '${{ github.ref_name }}'
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $tag = "v$version"
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --verify-tag --draft --title "Study Project $tag" --notes-file docs/RELEASE-NOTES.md --generate-notes
+            gh release create $tag --target '${{ github.sha }}' --draft --title "Study Project $tag" --notes-file docs/RELEASE-NOTES.md --generate-notes
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create draft release.' }
           }
           $assets = @(Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe','.blockmap' -or $_.Name -in 'latest.yml','SHA256SUMS.txt' } | ForEach-Object { $_.FullName })
