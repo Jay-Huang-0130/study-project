@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.9.1**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.9.2**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -154,3 +154,7 @@ Reviews 在整合前隔離各子圖局部 ID，收回輸出後先去除完全相
 群組資料由 Store 以 library.json 原子保存，透過四個受信任 IPC 管理；不寫入每本 book.json，不影響來源指紋。詳見 [GROUPS](GROUPS.md)。ReviewView 新增可選 panel 與 toolsOpen；舊圖沿用預設位置與收合工具。FloatingInfo 使用 Pointer Capture 拖移／拉伸，ResizeObserver 限制於畫布內；FitFormula 只縮放顯示，保留原 LaTeX。保存欄位有有限數值及尺寸驗證，畫布仍存於原教材。
 
 0.9.1：panel-layout 集中管理一般／最大化／還原／八方向拉伸的純幾何狀態。normalBounds 與 maximized 隨教材視圖原子保存；主程序驗證模式布林值與還原矩形的有限數值及上限。浮動視窗不再依賴暫存 ref 作為唯一還原來源。
+
+## 0.9.2 模型啟動期限
+
+一般 RPC 保持 60 秒；generate 使用獨立 8 分鐘生命週期，turn/start 回覆等待最多 8 分鐘加 30 秒的晚到 ID 清理寬限。turn/started 已帶有效 ID 時可視為啟動接受，取消對應 RPC 的本機等待並繼續接收內容；完成事件也清除尚未回覆的啟動 RPC。取消或期限到達後禁止輸出回寫，若 ID 晚到則精確 interrupt 後 unsubscribe。沒有 ID 時不送空字串，也不把 unsubscribe 當取消。連線錯誤與 RPC 錯誤統一清理計時器和監聽。單次失敗不自動重送，Engine 依既有機制暫停該教材並保留成功頁面。

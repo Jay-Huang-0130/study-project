@@ -7,7 +7,9 @@ import {cancelled} from './cancellation';
 import { EventEmitter } from 'node:events';
 
 const require = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
-type RPC = { id?: number; method?: string; params?: any; result?: any; error?: { message: string } };
+type RPC = { id?: number; method?: string; params?: any; result?: any; error?: { code?:number;message: string } };
+const TURN_TIMEOUT_MS=8*60_000;
+const LATE_START_GRACE_MS=30_000;
 export function codexExecutable(): string {
   if (process.env.STUDY_CODEX_PATH) return process.env.STUDY_CODEX_PATH;
   const packages = ['@openai/codex-win32-x64', '@openai/codex-win32-arm64', '@openai/codex'];
@@ -52,28 +54,37 @@ export class CodexClient extends EventEmitter {
     this.child.stderr.resume();
     createInterface({ input: this.child.stdout }).on('line', line => {
       let msg: RPC; try { msg = JSON.parse(line); } catch { return; }
-      if (msg.id !== undefined && msg.method) {
-        // A tutor must not execute commands, edit files, or invoke tools.
-        this.send({ id: msg.id, error: { code: -32601, message: 'Tools are disabled in Study Project.' } } as any);
-      } else if (msg.id !== undefined) {
-        const waiting = this.pending.get(msg.id); if (!waiting) return;
-        clearTimeout(waiting.timer); this.pending.delete(msg.id);
-        if (msg.error) waiting.reject(new Error(msg.error.message)); else waiting.resolve(msg.result);
-      } else if (msg.method) this.emit('notification', msg.method, msg.params);
+      this.receive(msg);
     });
     await this.call('initialize', { clientInfo: { name: 'study_project', title: 'Study Project', version: this.version }, capabilities: { experimentalApi: true } });
     this.send({ method: 'initialized' });
+  }
+  private receive(msg:RPC){
+    if(msg.id!==undefined&&msg.method){
+      // A tutor must not execute commands, edit files, or invoke tools.
+      this.send({id:msg.id,error:{code:-32601,message:'Tools are disabled in Study Project.'}});
+    }else if(msg.id!==undefined){
+      const waiting=this.pending.get(msg.id);if(!waiting)return;
+      if(msg.error)waiting.reject(new Error(msg.error.message));else waiting.resolve(msg.result);
+    }else if(msg.method)this.emit('notification',msg.method,msg.params);
   }
   private failed(error: Error) {
     for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
     this.pending.clear(); this.starting = undefined; this.emit('connectionError', error.message);
   }
   private send(value: RPC) { this.child?.stdin.write(JSON.stringify(value) + '\n'); }
-  call(method: string, params: unknown = {}, timeout = 60_000): Promise<any> {
+  call(method: string, params: unknown = {}, timeout = 60_000,signal?:AbortSignal): Promise<any> {
+    signal?.throwIfAborted();
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${method} 等待逾時，請重試。`)); }, timeout);
-      this.pending.set(id, { resolve, reject, timer }); this.send({ id, method, params });
+      const cleanup=()=>{clearTimeout(timer);this.pending.delete(id);signal?.removeEventListener('abort',abort);};
+      const fail=(error:Error)=>{cleanup();reject(error);};
+      const abort=()=>fail(cancelled());
+      const timer = setTimeout(() => fail(new Error(`${method} 等待逾時，請重試。`)), timeout);
+      this.pending.set(id, { resolve:value=>{cleanup();resolve(value);}, reject:fail, timer });
+      signal?.addEventListener('abort',abort,{once:true});
+      if(signal?.aborted){abort();return;}
+      try{this.send({ id, method, params });}catch(error){fail(error instanceof Error?error:new Error(String(error)));}
     });
   }
   async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown, signal?:AbortSignal): Promise<string> {
@@ -86,16 +97,24 @@ export class CodexClient extends EventEmitter {
     if(signal?.aborted){void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});throw cancelled();}
     let text = ''; let settled = false; let timer: NodeJS.Timeout;
     return new Promise<string>((resolve, reject) => {
+      const startController=new AbortController();
       let unsubscribed=false;const unsubscribe=()=>{if(unsubscribed)return;unsubscribed=true;void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});};
-      const cleanup = () => { signal?.removeEventListener('abort',abort);clearTimeout(timer); this.off('notification', handle); this.off('connectionError', disconnected);if(!abortRequested)unsubscribe(); };
-      const finish = (error?: Error) => { if (settled) return; settled = true; cleanup(); error ? reject(error) : resolve(text); };
-      let turnId:string|undefined;let abortRequested=false;let interrupted=false;
-      const interrupt=()=>{if(turnId&&!interrupted){interrupted=true;void this.call('turn/interrupt',{threadId:thread.id,turnId},5000).catch(()=>{}).finally(unsubscribe);}};
-      const abort=()=>{abortRequested=true;interrupt();finish(cancelled());};
-      const disconnected = (message: string) => finish(new Error(message));
+      let turnId:string|undefined,stopRequested=false,interrupted=false;
+      const detach=()=>{this.off('notification',handle);this.off('connectionError',disconnected);};
+      const interrupt=()=>{if(!turnId||interrupted)return;interrupted=true;detach();startController.abort();void this.call('turn/interrupt',{threadId:thread.id,turnId},5000).catch(()=>{}).finally(unsubscribe);};
+      const finish = (error?: Error) => {
+        if(settled)return;settled=true;signal?.removeEventListener('abort',abort);clearTimeout(timer);
+        if(stopRequested){interrupt();}else{detach();startController.abort();unsubscribe();}
+        error?reject(error):resolve(text);
+      };
+      const abort=()=>{stopRequested=true;finish(cancelled());};
+      const disconnected = (message: string) => {finish(new Error(message));detach();startController.abort();};
       const handle = (method: string, params: any) => {
-        if (params?.threadId !== thread.id || settled) return;
-        if(method==='turn/started'){turnId=params.turn?.id;if(abortRequested)interrupt();}
+        if (params?.threadId !== thread.id) return;
+        // Notifications can prove acceptance before the turn/start RPC reply arrives.
+        // A cancelled, unacknowledged start keeps only this guarded late-ID path.
+        if(method==='turn/started'&&params.turn?.id){turnId=params.turn.id;if(stopRequested)interrupt();else startController.abort();}
+        if(settled){if(method==='turn/completed'){detach();startController.abort();unsubscribe();}return;}
         if (method === 'item/agentMessage/delta') { text += params.delta; onDelta?.(text); }
         if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase !== 'commentary') text = params.item.text;
         if (method === 'turn/completed') {
@@ -105,13 +124,16 @@ export class CodexClient extends EventEmitter {
         }
       };
       this.on('notification', handle); this.on('connectionError', disconnected);
-      timer = setTimeout(() => { void this.call('turn/interrupt', { threadId: thread.id, turnId: turnId ?? '' }).catch(() => {}); finish(new Error('生成超過 8 分鐘，已中斷，請重試。')); }, 8 * 60_000);
+      timer = setTimeout(() => {stopRequested=true;finish(new Error(turnId?'這次生成等待超過 8 分鐘，已暫停；已完成內容會保留，請按繼續生成重試。':'模型啟動等待超過 8 分鐘，已暫停；已完成內容會保留，請稍後按繼續生成。'));},TURN_TIMEOUT_MS);
       signal?.addEventListener('abort',abort,{once:true});
-      if(signal?.aborted){abort();unsubscribe();return;}
+      if(signal?.aborted){abort();detach();unsubscribe();return;}
       void this.call('turn/start', {
         threadId: thread.id, input: [{ type: 'text', text: prompt, text_elements: [] }, ...images.map(p => ({ type: 'localImage', path: p }))],
         ...(schema ? { outputSchema: schema } : {}),
-      }).then(r => { turnId = r.turn.id;if(abortRequested)interrupt(); }).catch(error=>{finish(error);if(abortRequested)unsubscribe();});
+      },TURN_TIMEOUT_MS+LATE_START_GRACE_MS,startController.signal).then(r => {turnId=r.turn.id;if(stopRequested)interrupt();}).catch(error=>{
+        if(startController.signal.aborted)return;
+        finish(error);detach();unsubscribe();
+      });
     });
   }
   async close() {
