@@ -26,5 +26,5 @@ test('typography settings migrate, validate independently and survive reopening'
   const defaults=normalizeSettings({});assert.equal(defaults.uiScale,100);assert.equal(defaults.readingFontSize,13);
   const invalid=normalizeSettings({uiScale:1000,readingFontSize:NaN});assert.equal(invalid.uiScale,100);assert.equal(invalid.readingFontSize,13);
   const dir=mkdtempSync(path.join(os.tmpdir(),'study-font-'));
-  try{const store=new Store(dir);store.updateSettings({uiScale:120,readingFontSize:20});const restored=new Store(dir);assert.equal(restored.settings.uiScale,120);assert.equal(restored.settings.readingFontSize,20);assert.equal(restored.settings.aiConcurrency,4);}finally{rmSync(dir,{recursive:true,force:true});}
+  try{const store=new Store(dir);store.updateSettings({uiScale:120,readingFontSize:20});const restored=new Store(dir);assert.equal(restored.settings.uiScale,120);assert.equal(restored.settings.readingFontSize,20);assert.equal(restored.settings.aiConcurrency,1);}finally{rmSync(dir,{recursive:true,force:true});}
 });

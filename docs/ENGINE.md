@@ -1,14 +1,14 @@
-# Study Project Engine：漸進教材理解與有限並行教學生成
+# Study Project Engine：漸進教材理解與單請求多頁串流生成
 
-> 技術論文式設計說明。對應 **0.9.4**，更新於 **2026-10-26**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
+> 技術論文式設計說明。對應 **0.10.0**，更新於 **2026-10-27**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
 
 ## 摘要
 
-PDF 自學工具同時面臨首段講解延遲、跨頁上下文不足，以及非同步結果錯頁的問題。Study Project 將處理流程拆為本機文字與圖像解析、分段逐頁索引、全書脈絡整合及單頁講稿生成，透過具有容量限制的優先佇列與教材輪替排程，在不等待整份教材完成視覺分析的前提下，產出可立即閱讀的講稿。
+PDF 自學工具同時面臨首段講解延遲、跨頁上下文不足，以及非同步結果錯頁的問題。Study Project 將處理流程拆為本機文字與圖像解析、分段逐頁索引、全書脈絡整合及多頁講稿串流生成，透過具有容量限制的優先佇列與教材輪替排程，在不等待整份教材完成視覺分析的前提下，產出可立即閱讀的講稿。
 
 本系統以來源頁面與顯式上下文建構每個獨立模型請求，保存生成時的索引版本及覆蓋範圍；以教材物件身分、頁碼與 generationId 防止過期結果回寫。本文說明實作演算法、取消恢復語義、效能模型與控制流程測試。現有證據支持排程與保存行為，尚不足以量化模型教學品質或證明高並行數不影響上游服務表現。
 
-**關鍵字**：PDF 學習、漸進索引、非同步排程、上下文建構、有限並行、可恢復生成。
+**關鍵字**：PDF 學習、漸進索引、非同步排程、上下文建構、多頁分批、可恢復生成。
 
 ## 1. 問題定義與設計目標
 
@@ -38,7 +38,7 @@ Engine 位於 Electron 主程序，核心是 [engine.ts](../electron/engine.ts)�
 | `P_i` | 第 i 頁的文字、圖像就緒、講稿與問答狀態 | `book.pages[i-1]` |
 | `S_t` | t 時刻已完成詳細索引的頁面集合 | `book.map.pages` |
 | `M_t` | 當時的索引、術語與總覽快照 | `BookMap` |
-| `C` | 模型容量，預設 4、範圍 1–6 | `settings.aiConcurrency` |
+| `C` | 模型容量，固定 1（全域） | `settings.aiConcurrency` |
 | `W` | 每個 PDFLoader 的工作緒目標，預設 2、範圍 1–4 | `settings.pdfWorkers` |
 | `J` | 已登記的 Engine 工作，含可能正在等待 Pool 的工作 | `jobs` |
 | `g` | 單次講稿或問答生成識別 | `generationId` |
@@ -50,7 +50,7 @@ AI 同時請求數是 Provider 呼叫的有限容量，不是 Node CPU 執行緒
 | 類型 | 輸入與輸出 | Pool 優先級 |
 | --- | --- | ---: |
 | Question | 教材上下文、當頁講稿、最近完成問答 → 回答／練習 | 0 |
-| Lesson | 當頁上下文與講解偏好 → 單頁講稿 | 1 |
+| Lesson | 多個目標原頁、上下文與逐頁講解偏好 → 多頁獨立講稿 | 1 |
 | Index | 頁面文字與圖像 → 局部索引；或完整索引 → 全書總覽 | 2 |
 
 數字越小越優先，同優先級按加入順序。優先級作用於**等待佇列**，不搶占已開始的遠端請求，也沒有永久保留的問答專用槽位。
@@ -89,11 +89,11 @@ flowchart TD
 score(i) = i
 ```
 
-閱讀位置 c 不參與排序。圖像、索引與講稿均由第 1 頁一路往後；跳過各階段已完成與在途工作，續作先補前方缺頁。一般翻頁只保存閱讀位置，不取消或重排背景工作。多個請求依序派出但可能不同順序完成，完成即可顯示，不等待整輪。
+閱讀位置 c 不參與排序。圖像、索引與講稿均由第 1 頁一路往後；跳過各階段已完成與在途工作，續作先補前方缺頁。一般翻頁只保存閱讀位置，不取消或重排背景工作。AI 請求依序執行；單次講稿批內亦依升序輸出，完整一頁即保存，不等待整批。
 
 ### 3.2 局部索引
 
-`nextIndexPages()` 由最小尚未存在於 `mapChunks` 的頁碼開始收集；遇到第一個未就緒圖像便停止，不能跨過缺頁。`indexChunk()` 只接收此序列。第一批最多 2 頁，後續最多 6 頁；選出的頁面可不連續，文字、圖像與頁碼保持同序。
+`nextIndexPages()` 由最小尚未存在於 `mapChunks` 的頁碼開始收集；遇到第一個未就緒圖像便停止，不能跨過缺頁。`indexChunk()` 只接收此序列。第一批最多 5 頁，後續最多 10 頁；選出的頁面可不連續，文字、圖像與頁碼保持同序。
 
 模型透過結構化輸出產生 `page / topic / summary / terms / relatedPages / density`。摘要指示最多 3 個重點、約 120 字；這是生成指示，不是字數裁切器。`density` 為 `brief / normal / dense`。
 
@@ -107,73 +107,41 @@ score(i) = i
 
 輸出驗證通過後將地圖標為完整、`mapStatus=done`。既有講稿不會自動重跑；早期講稿仍保留其建立時的覆蓋範圍，使用者可逐頁要求重新講解。
 
-## 4. 方法：雙層排程與動態補位
+## 4. 方法：全域單請求與多頁批次
 
-### 4.1 外層教材輪替
+所有 Provider 請求共用容量為 1 的 PriorityPool。背景 wake 亦最多登記一個工作；手動問題與概念圖可排隊，但不會取得第二個 Provider 名額。舊 aiConcurrency 設定統一遷移為 1，介面移除 AI 並行選項。本機 PDF Worker 與 AI 容量分開。
 
-`wake()` 先同步 Pool 容量，再找出本次 `generationStarted=true` 的教材。未授權時不派送模型工作；已暫停教材跳過。背景工作的啟動採輪替 cursor，每成功排入一份教材的工作，下一輪由其後一份開始。
+排隊優先順序為問答 0、講稿 1、索引／整合／概念圖 2，同級 FIFO。已開始的請求不被新問題搶占，因此多頁批次期間提問需等目前批次結束；本版沒有為互動另開並行名額。
 
-`activeId` 僅代表閱讀選擇，不會自動使教材加入生成；已由使用者啟動的其他教材可繼續背景執行。
+背景教材以 cursor 輪替，單份教材先選可處理的 pending 問題，再選講稿或索引。每次索引完成設定 preferLesson，接著先生成就緒頁面的講稿；否則繼續索引或整合全書。完整索引是完整總覽的前置條件，不是早期講稿的前置條件。
 
-### 4.2 單份教材選擇規則
-
-以下為依原始碼整理的偽程式碼，省略保存與取消處理：
-
-```text
+~~~text
 WAKE:
-    if stopping: return
-    update model pool capacity C
-    books ← books explicitly started in this session
-    restore partial maps from saved chunks if necessary
-    if not authenticated: return
+  if stopped or unauthenticated: return
+  if jobs.size >= 1: return
+  round-robin books explicitly started, skipping paused books:
+    if pending eligible question: enqueue question
+    else if ready lessons and (preferLesson or no index work):
+      enqueue one multi-page lesson batch; clear preferLesson
+    else if missing index pages: enqueue first up to 5 / later up to 10 pages
+    else if all indexed but map unfinished: enqueue overview
+    stop after registering one job
+~~~
 
-    while registered background capacity permits (|J| < C):
-        try books from round-robin cursor:
-            skip paused books
-            pause books with unrecovered legacy errors
-            if SCHEDULE(book) starts a job:
-                move cursor to next book; try filling another slot
-        if no book can start a job: break
+講稿批次依升序選最前方 pending 頁，跳過 done 快取；遇到 running、缺圖或缺索引即停止，不跨過缺少前置資料的頁面。最多 5 頁，另依講解偏好與密度累加預估篇幅，軟預算 3000 字；例如詳細 dense 預估每頁 1200 字，最多 2 頁。這是分組啟發式，不是 token 上限或模型實際長度保證。
 
-SCHEDULE(book):
-    if no question job exists for this book:
-        start first eligible pending message, if any
-        return started
+一批開始後，各目標頁共用 generationId 並標 running。一個 Provider 請求依序輸出多個獨立 JSON 物件；每個物件只有 page 與 lesson（完整 Markdown 字串），不使用需要等待收尾的外層陣列。講稿不是多 agent 工作，也不在批內呼叫下一個 agent。
 
-    n ← earliest pending page, only if its image and index are ready
-    missing ← ascending unknown pages; stop at first unready image
-    canIndex ← no index job exists AND map is unfinished AND
-               (missing is nonempty OR all pages have been indexed)
+~~~json
+{"page":1,"lesson":"第一頁講稿。"}
+{"page":2,"lesson":"第二頁講稿。"}
+~~~
 
-    if n exists AND ((preferLesson AND no lesson job exists) OR NOT canIndex):
-        clear preferLesson; start one lesson for n
-        return started
+LessonBatchStream 接收累積串流，辨識 JSON 字串跳脫及巢狀大括號，不依單次 delta 或簡單換行切頁。每個完整物件須符合預期頁碼、順序、非空講稿與欄位規則。每頁通過後立即持久化為 done，並通知 renderer；其他頁仍 running。最後回覆再次核對，不重複保存，若修改先前已輸出的內容則拒絕。必要公式、Markdown 與換行由 JSON 字串正確跳脫，顯示前還原。
 
-    if canIndex:
-        index up to 2 / 6 missing pages, or finalize the full map
-        set preferLesson after successful index job
-        return started
+整批結束才取得下一個 AI 請求，但閱讀不需等整批。若截斷、缺頁、重複、錯序或斷線，受影響教材暫停，已提交頁保留，未完成頁恢復 pending；手動繼續重新分組最早缺頁。這不是從模型同一個 token 接續。
 
-    return not started
-```
-
-`preferLesson` 讓索引完成後有機會先開始一頁講稿。每份教材最多一個索引 job，因而索引批次本身仍有順序依賴；其他就緒講稿可以與它並行。
-
-新問題的 `ask()` 可直接登記 Question 工作，再等待 Pool。故 `jobs.size` 可能暫時大於 `C`；它不是「真正正在遠端生成的數量」。每份教材同時最多一個已登記的 Question job，畫面上的模型 active / queued 來自 Pool。
-
-### 4.3 內層 Provider 容量
-
-[PriorityPool](../electron/priority-pool.ts) 將等待項目按 `(priority, enqueueOrder)` 排序；只要有容量就執行。當一個 Provider Promise 結束，`active--` 後立刻 `drain()`；Engine job 的 `finally` 另約 30ms 後觸發 `wake()`，登記後續背景工作。
-
-容量固定時，本機執行中的 Provider 呼叫不超過 `C`。若把容量從 6 調成 2，現有 6 個工作不會為此被中斷；降到低於新上限前不再開新工作。此數字不承諾取消指令到達上游前，遠端伺服器的實際運算也瞬間降到相同數量。
-
-### 4.4 為何不是每 6 頁等一輪
-
-假設 6 個講稿已開始，第一頁先完成且後續頁面已完成索引與圖像準備，釋出的容量可立即交給下一頁，不等其他 5 個完成。
-
-然而「槽位空了」不等於必定有合格講稿：首批索引尚未完成、下一頁圖像未就緒、全書整合正在處理、教材暫停或未授權，都可能讓容量沒有填滿。因此本設計不宣稱整條管線在所有時刻都能滿載。
-
-輪替提高教材間的啟動機會，但不等於有嚴格最長等待時間保證；持續高優先問題可能延後背景工作。現版沒有 aging、預留槽位或搶占式排程。
+取消會釋放本機工作並送遠端中斷；網路尚未確認中斷或 turnId 晚到時，不能承諾遠端運算零時間重疊。正常執行的本機 Provider 呼叫嚴格共用一個名額。
 
 ## 5. 方法：每次請求的上下文建構
 
@@ -194,13 +162,13 @@ Provider 每次建立新的 ephemeral thread。獨立請求不被假設共享先
 
 ### 5.2 原頁集合
 
-一般講稿使用依順序去重的候選列表：
+批次講稿與問答使用依順序去重的候選列表：
 
 ```text
 [目標頁, 額外指定頁..., 前一頁, 後一頁, 目標索引.relatedPages...]
 ```
 
-移除越界頁後，一般請求取前 6 頁；帶練習來源範圍者取前 12 頁。目標頁永遠排在最前，避免關聯太多把它擠出。僅 `imageReady=true` 的頁面附圖，缺圖頁不得被當成已視覺核對。
+移除越界頁後，無額外指定頁的請求取前 6 頁；多頁講稿與帶練習來源範圍者取前 12 頁。本批所有目標頁優先保留，逐頁索引與 lessonGuide 逐一加入提示。目標頁永遠排在最前，避免關聯太多把它擠出。僅 `imageReady=true` 的頁面附圖，缺圖頁不得被當成已視覺核對。
 
 這不是向量檢索，也沒有自動遞迴展開所有概念前置頁。若來源選取或 OCR 缺失不足，現版主要依提示要求模型表達不確定，沒有額外的自動取證代理。
 
@@ -268,33 +236,18 @@ stateDiagram-v2
 
 ## 8. 效能模型與取捨
 
-令已就緒工作耗時為 `t_1 ... t_m`。在忽略依賴、傳輸、限流與排程成本的理想條件下：
+若不重試、沒有手動重做、圖像準備充分，理想索引批次數為 K(N) = 1 + ceil(max(0,N-5)/10)。講稿批次數 L 受篇幅及就緒資料影響，最理想為 ceil(N/5)，實際可能更高。請求數約為 K_actual + 1 次總覽 + L_actual + Q 次互動；概念圖另計。過去講稿每頁一次的 N 次請求改為 L 次。
 
-$$
-T_{\mathrm{ideal}} \geq \max\!\left(\max_{1\leq j\leq m} t_j,\; \frac{1}{C}\sum_{j=1}^{m}t_j\right)
-$$
+單請求減少併發與重複請求開銷，不代表繞過使用額度或 token／流量限制。批次輸入與輸出變大，也可能增加首段等待、長尾延遲及格式風險；本版不聲稱已確認上游限流成因、不聲稱必然更快。單次模型請求仍受現有 8 分鐘期限約束，不為大批次無限延長等待。
 
-固定每 `C` 頁一輪的等待時間則近似各輪最慢工作的耗時總和；上述下界只適用於所列理想條件。
-
-動態補位可減少等待同輪慢頁造成的閒置，但不保證達到上述下界，也不保證服務端吞吐隨 `C` 線性成長。
-
-若不重試、不重新生成且每批輸入充分就緒，索引最少批數可估為：
-
-```text
-K_ideal(N) = 1 + ceil(max(0, N - 2) / 6), N ≥ 1
-模型請求數 = K_actual + 1 次全書整合 + N 次講稿 + Q 次互動
-```
-
-實作可能因當時圖像就緒較少而產生較小批次，因此 `K_actual` 不一定等於理想值；中斷重做還會增加請求。問答每次重新附帶上下文，沒有持久化模型記憶節省機制。
-
-本機索引／排序會遍歷頁面；`orderedPages` 排序約為 `O(N log N)`，整份 JSON 保存也隨講稿與歷史增長。這是目前 Alpha 的可理解實作，尚不是大規模資料庫或最小化 prompt 成本的最佳化解法。
+評估須固定模型、教材與講解偏好，比較首次可讀時間、全書完成時間、成功請求數、逾時率、用量及人工逐頁品質；本次模擬測試僅驗證本機控制流程。
 
 ## 9. 驗證與結果
 
 | 證據 | 已支持的結論 | 不能推出的結論 |
 | --- | --- | --- |
-| 0.9.4 的 87 項自動測試，含可控制 Provider | 並行、取消、錯頁隔離、快取與更新控制流程符合測試條件 | 真實模型準確率、真實網路首段延遲 |
-| 多頁亂序完成與問題優先測試 | 結果依原頁保存；等待問題可先於背景佇列 | 已在途請求被搶占、所有工作都有等待上限 |
+| 0.10.0 的 91 項自動測試，含可控制 Provider | 單請求、多頁串流、取消續跑、錯頁隔離、快取與更新符合測試條件 | 真實模型準確率、真實網路首段延遲 |
+| 多頁分段輸出與問題優先測試 | 結果依原頁保存；等待問題可先於背景佇列 | 已在途請求被搶占、所有工作都有等待上限 |
 | PDF Worker 單次歷史量測：191 頁、1 緒 14.67s、2 緒 8.04s | 該機、該教材的本機圖像渲染約快 1.82 倍 | AI 推論也快 1.82 倍、所有電腦都有相同改善 |
 | 0.7.1 預覽對照與重載測試 | renderer PDF 生命週期與錯誤恢復修補有效 | Engine 教學品質因此提高 |
 | 使用者對現行準確性與速度的正向回饋 | 目前體驗符合該使用情境 | 有盲測、基準資料集或統計顯著性 |
@@ -308,13 +261,13 @@ K_ideal(N) = 1 + ceil(max(0, N - 2) / 6), N ≥ 1
 3. **來源挑選**：固定鄰頁與少量關聯可能漏掉較遠的必要定義，尚無向量檢索或證據召回評估。
 4. **公平與互動延遲**：沒有預留問答容量、搶占或 aging；需量測飢餓與 p95 延遲。
 5. **保存擴展**：大書庫與長對話可能增加整份 JSON 寫入成本，尚無跨程序交易保護。
-6. **上游限制**：並行數增加可能導致限流或失敗，不能從本機排程直接推論服務端品質。
+6. **上游限制**：較大批次或較多請求仍可能受到限流或失敗影響，不能從本機排程直接推論服務端品質。
 
 後續比較應固定模型、教材、提示與來源快照，將「排程改變」和「上下文改變」分開實驗，量測首份可讀時間、全書完成時間、問答 p50/p95、請求與用量、錯頁率及獨立人工語義正確率。這些是未來驗證方案，不是現有結果。
 
 ## 11. 實作與證據索引
 
-- [Engine：排程、地圖、context、lesson、answer](../electron/engine.ts)
+- [Engine：排程、地圖、context、lessons、answer](../electron/engine.ts)
 - [PriorityPool：容量、FIFO、優先級](../electron/priority-pool.ts)
 - [Store：雜湊、原子快照、啟動恢復](../electron/store.ts)
 - [完整教材判定](../electron/book-state.ts)

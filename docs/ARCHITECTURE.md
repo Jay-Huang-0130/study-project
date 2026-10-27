@@ -1,6 +1,6 @@
 # 系統架構與實作邊界
 
-基準：**0.9.4**；更新日期：**2026-10-26**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
+基準：**0.10.0**；更新日期：**2026-10-27**。Engine 的演算法與上下文細節見 [ENGINE.md](ENGINE.md)，產品驗收見 [SPEC.md](../SPEC.md)。
 
 ## 程序與模組
 
@@ -164,3 +164,7 @@ Reviews 在整合前隔離各子圖局部 ID，收回輸出後先去除完全相
 ## 0.9.4 生成診斷
 
 Engine 在共用 Pool 前註冊請求、進槽後記錄 Provider 開始，CodexClient 以可選回呼回報連線、thread/start、turn/start、接受及第一份非空 agentMessage。原始 RPC payload 不變，觀測不觸發額外模型請求。診斷只存有界記憶體；設定面板展開時才每秒讀取，手動匯出以 atomicJSON 寫入書庫根目錄。詳見 [DIAGNOSTICS](DIAGNOSTICS.md)。
+
+## 0.10.0 單請求多頁講稿
+
+Engine 的全域 Provider 容量固定為 1，涵蓋講稿、索引、總覽、問答與概念圖。索引首批最多 5 頁、後續最多 10 頁；講稿每批最多 5 頁，按密度與講解偏好縮小。新增 lesson-batch.ts 解析獨立 JSON 頁面紀錄，完整頁即保存，不等整批。舊 aiConcurrency 設定自動遷移為 1，PDF Worker 不變。截斷或取消保留完成頁，續作重做未完成頁。詳見 [Engine](ENGINE.md)。

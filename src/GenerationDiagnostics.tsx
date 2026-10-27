@@ -1,7 +1,7 @@
 import {useEffect,useState} from 'react';
 import type {GenerationDiagnostics as Snapshot,ModelTrace,ModelPhase} from './shared';
 const labels:Record<ModelPhase,string>={queued:'等待 AI 容量',connecting:'啟動模型連線',thread:'建立對話',starting:'等待啟動確認',waiting:'等待首段文字',receiving:'接收模型內容',done:'請求完成',error:'請求失敗',cancelled:'已取消'};
-const kinds:Record<ModelTrace['kind'],string>={lesson:'逐頁講稿',index:'分批索引',overview:'全書脈絡',question:'問答／練習',review:'概念地圖'};
+const kinds:Record<ModelTrace['kind'],string>={lesson:'分批講稿',index:'分批索引',overview:'全書脈絡',question:'問答／練習',review:'概念地圖'};
 const failures={timeout:'等待逾時',network:'連線錯誤',quota:'用量或速率限制',auth:'登入或權限',other:'其他錯誤'};
 const finished=(r:ModelTrace)=>['done','error','cancelled'].includes(r.phase);
 const seconds=(ms?:number)=>ms===undefined?'—':`${(Math.max(0,ms)/1000).toFixed(1)} 秒`;

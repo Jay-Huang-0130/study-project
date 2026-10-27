@@ -7,6 +7,7 @@ import { PriorityPool } from './priority-pool';
 import {bookComplete} from './book-state';
 import {abortable,cancelled} from './cancellation';
 import {lessonGuide} from './lesson-style';
+import {lessonBatchPages,LessonBatchStream} from './lesson-batch';
 import {reviewSchema,reviewInstructions} from './review';
 
 export interface Provider { generate(prompt: string, images: string[], model: string, instructions: string, delta?: (text: string) => void, schema?: unknown, signal?:AbortSignal,onActivity?:(phase:ModelActivity)=>void): Promise<string> }
@@ -59,7 +60,7 @@ export class Engine {
   private stopping=false;
   private cursor=0;
   private pool:PriorityPool;
-  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{}){this.pool=new PriorityPool(store.settings.aiConcurrency,changed);}
+  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{}){this.pool=new PriorityPool(1,changed);}
   get progress(){return {activeLessons:[...this.jobs.values()].filter(j=>j.kind==='lesson').length,indexing:[...this.jobs.values()].some(j=>j.kind==='index'),modelActive:this.pool.snapshot.active,modelQueued:this.pool.snapshot.queued};}
   bookState(book:Book):'running'|'paused'|'complete'|'waiting'{
     if(book.generationPaused)return 'paused';
@@ -75,13 +76,12 @@ export class Engine {
   }
   wake(){
     if(this.stopping)return;
-    this.pool.setCapacity(this.store.settings.aiConcurrency);
     if(this.activeId){const b=this.store.book(this.activeId);if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}}
     const books=[...this.store.books.values()].filter(b=>b.generationStarted);
     for(const b of books)if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}
     if(this.activeId&&this.store.books.has(this.activeId))this.activity=this.activityFor(this.store.book(this.activeId));
     if(!this.authenticated)return;
-    while(this.jobs.size<this.store.settings.aiConcurrency){
+    while(this.jobs.size<1){
       let started=false;
       for(let i=0;i<books.length;i++){
         const at=(this.cursor+i)%books.length,book=books[at];
@@ -99,12 +99,13 @@ export class Engine {
     }}
     const n=book.map?nextPage(book):undefined;
     const known=new Set(book.mapChunks.flat().map(p=>p.page));
-    const missing=nextIndexPages(book,known.size?6:2);
+    const missing=nextIndexPages(book,known.size?10:5);
     const indexKey=`${book.id}:index`;
     const canIndex=book.count>0&&book.mapStatus!=='done'&&book.mapStatus!=='error'&&!this.jobs.has(indexKey)&&(missing.length>0||known.size===book.count);
     if(n!==undefined&&((this.preferLesson.has(book)&&![...this.jobs.values()].some(j=>j.book===book&&j.kind==='lesson'))||!canIndex)){
       this.preferLesson.delete(book);
-      void this.launch(book,`lesson:${n}`,'lesson',signal=>this.lesson(book,n,signal),n);return true;
+      const numbers=lessonBatchPages(book,this.store.settings.lessonDetail);
+      void this.launch(book,`lesson:${n}`,'lesson',signal=>this.lessons(book,numbers,signal),n);return true;
     }
     if(canIndex){
       void this.launch(book,'index','index',async signal=>{
@@ -120,7 +121,7 @@ export class Engine {
     return run(job.controller.signal).catch(error=>{
       if(job.controller.signal.aborted||this.store.books.get(book.id)!==book)return;
       if(message)message.status='pending';
-      if(kind==='lesson'&&page){book.pages[page-1].status='pending';book.pages[page-1].error=undefined;}
+      // pauseBook resets every unfinished page in this batch, preserving committed pages.
       if(kind==='index'){book.mapStatus='pending';book.mapError=undefined;}
       this.pauseBook(book.id,error instanceof Error?error.message:String(error));
     }).finally(()=>{
@@ -193,8 +194,7 @@ export class Engine {
     this.valid(book,signal);
     book.mapChunks.push(validateMapChunk(parseJSON(raw),numbers,book.count));
     this.partialMap(book);this.persist(book);
-    // Do not wait for the next index batch to finish before showing this batch's lessons.
-    // The scheduler starts ready lessons while other books continue in the background.
+    // Alternate serial index and lesson batches so ready pages remain readable early.
   }
   private async finalizeMap(book:Book,signal:AbortSignal){
     this.activity='背景整合全書脈絡，已完成講解可繼續閱讀';this.changed();
@@ -222,13 +222,29 @@ export class Engine {
       images:pictures.map(p=>this.image(book,p.number)),
     };
   }
-  private async lesson(book:Book,n:number,signal:AbortSignal){
-    const page=book.pages[n-1],ctx=this.context(book,n),model=this.store.settings.model,detail=this.store.settings.lessonDetail,generationId=randomUUID();
-    page.generationId=generationId;page.status='running';page.error=undefined;this.activity=`準備第 ${n} 頁講解，其餘分析在背景繼續`;this.persist(book);
-    const answer=await this.generate(book,1,signal,`${ctx.text}\n${lessonGuide(book,n,detail)}`,ctx.images,model,instructions,text=>{if(!signal.aborted)this.delta({bookId:book.id,page:n,generationId,text});});
-    // Additive map updates must not discard a valid in-flight page answer.
-    if(this.store.books.get(book.id)!==book||!acceptsResult(book,n,ctx.version,generationId))return;
-    page.lesson=answer;page.status='done';page.mapVersion=ctx.version;page.model=model;page.lessonDetail=detail;page.contextPages=ctx.coverage;page.contextComplete=ctx.complete;this.persist(book);
+  private async lessons(book:Book,numbers:number[],signal:AbortSignal){
+    if(!numbers.length)return;
+    const related=numbers.flatMap(n=>book.map!.pages.find(p=>p.page===n)?.relatedPages??[]);
+    const ctx=this.context(book,numbers[0],[...numbers.slice(1),numbers.at(-1)!+1,...related]),model=this.store.settings.model,detail=this.store.settings.lessonDetail,generationId=randomUUID();
+    for(const n of numbers){const page=book.pages[n-1];page.generationId=generationId;page.status='running';page.error=undefined;}
+    this.activity=`分批講解第 ${numbers.join('、')} 頁，完成一頁即可閱讀`;this.persist(book);
+    const controller=new AbortController(),abort=()=>controller.abort();signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();
+    let streamError:unknown;
+    const stream=new LessonBatchStream(numbers,({page:n,lesson})=>{
+      this.valid(book,signal);
+      if(!acceptsResult(book,n,ctx.version,generationId))throw cancelled();
+      const page=book.pages[n-1];page.lesson=lesson;page.status='done';page.mapVersion=ctx.version;page.model=model;page.lessonDetail=detail;page.contextPages=ctx.coverage;page.contextComplete=ctx.complete;
+      this.persist(book);this.delta({bookId:book.id,page:n,generationId,text:lesson});
+    });
+    const prompt=`${ctx.text}\n本次唯一目標頁碼（依序）：${numbers.join('、')}。每頁都要獨立完成教學講稿，不合併或跳頁。參考頁只作依據，不能輸出其講稿。保持術語與跨頁推導一致；不能因一次多頁而省略必要內容。\n${numbers.map(n=>`當頁索引：${JSON.stringify(book.map!.pages.find(p=>p.page===n))}\n${lessonGuide(book,n,detail)}`).join('\n\n')}\n輸出協定：只輸出連續的獨立 JSON 物件，每頁一個 {"page":頁碼,"lesson":"完整 Markdown 講稿"}，物件之間換行。lesson 內的換行、反斜線、引號必須符合 JSON 跳脫規則。完成一頁立刻輸出該物件，再繼續下一頁。不要外層陣列、pages 欄位、程式碼圍欄、前言或結語。例：{"page":${numbers[0]},"lesson":"本頁講解。"}`;
+    try{
+      const answer=await this.generate(book,1,controller.signal,prompt,ctx.images,model,instructions,text=>{
+        if(signal.aborted||streamError)return;
+        try{stream.update(text);}catch(error){streamError=error;controller.abort();}
+      });
+      this.valid(book,signal);stream.update(answer,true);
+    }catch(error){throw streamError??error;}
+    finally{signal.removeEventListener('abort',abort);}
   }
   async ask(bookId:string,n:number,question:string,kind:Message['kind']='question',scope?:{start:number;end:number;count:number}){
     if(!this.authenticated)throw new Error('請先登入 ChatGPT。');

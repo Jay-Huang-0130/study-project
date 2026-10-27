@@ -6,7 +6,8 @@ import type { Book, BookSummary, StudySettings, LibraryGroup } from '../src/shar
 
 export function normalizeSettings(raw:Partial<StudySettings>):StudySettings{
   return {paused:typeof raw.paused==='boolean'?raw.paused:false,model:typeof raw.model==='string'?raw.model:'',
-    aiConcurrency:Number.isInteger(raw.aiConcurrency)&&raw.aiConcurrency!>=1&&raw.aiConcurrency!<=6?raw.aiConcurrency!:4,
+    // Migrate older parallel settings to one global model request.
+    aiConcurrency:1,
     pdfWorkers:Number.isInteger(raw.pdfWorkers)&&raw.pdfWorkers!>=1&&raw.pdfWorkers!<=4?raw.pdfWorkers!:2,
     lessonDetail:raw.lessonDetail&&['concise','standard','detailed'].includes(raw.lessonDetail)?raw.lessonDetail:'concise',
     uiScale:Number.isInteger(raw.uiScale)&&raw.uiScale!>=80&&raw.uiScale!<=150?raw.uiScale!:100,
