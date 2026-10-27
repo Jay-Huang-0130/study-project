@@ -35,10 +35,10 @@ export function nextPage(book: Book): number | undefined {
   const n=orderedPages(book).find(n=>book.pages[n-1].status==='pending');
   return n!==undefined&&book.pages[n-1].imageReady&&(!indexed||indexed.has(n))?n:undefined;
 }
-export function nextIndexPages(book:Book,limit:number):number[]{
+export function nextIndexPages(book:Book,limit:number,reserved:ReadonlySet<number>=new Set()):number[]{
   const known=new Set(book.mapChunks.flat().map(p=>p.page)),next:number[]=[];
   for(const n of orderedPages(book)){
-    if(known.has(n))continue;
+    if(known.has(n)||reserved.has(n))continue;
     if(!book.pages[n-1].imageReady)break;
     next.push(n);if(next.length>=limit)break;
   }
@@ -55,7 +55,7 @@ export class Engine {
   set activeId(id:string|undefined){if(id)this.store.book(id);this.selectedId=id;}
   authenticated=false;
   activity='選擇教材，開始今天的學習';
-  private jobs=new Map<string,{book:Book;kind:'lesson'|'index'|'question';controller:AbortController;page?:number;message?:Message}>();
+  private jobs=new Map<string,{book:Book;kind:'lesson'|'index'|'question';controller:AbortController;page?:number;message?:Message;pages:number[]}>();
   private preferLesson=new Set<Book>();
   private stopping=false;
   private generationQueue:Book[]=[];
@@ -63,7 +63,7 @@ export class Engine {
   private preparingBooks=new Set<Book>();
   private pool:PriorityPool;
   private probeBusy=false;
-  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{},requestGapMs=0){this.pool=new PriorityPool(1,changed,requestGapMs);}
+  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{},requestGapMs=0){this.pool=new PriorityPool(store.settings.aiConcurrency,changed,requestGapMs);}
   get progress(){return {activeLessons:[...this.jobs.values()].filter(j=>j.kind==='lesson').length,indexing:[...this.jobs.values()].some(j=>j.kind==='index'),modelActive:this.pool.snapshot.active,modelQueued:this.pool.snapshot.queued};}
   private syncQueue(){
     const live=(book:Book)=>this.store.books.get(book.id)===book&&book.generationStarted&&!book.generationPaused&&(!bookComplete(book)||[...this.jobs.values()].some(j=>j.book===book));
@@ -108,14 +108,14 @@ export class Engine {
     this.syncQueue();
     for(const b of this.generationQueue)if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}
     if(!this.authenticated)return;
-    // A committed final page is not the end of its in-flight request. Drain the job first.
-    if(this.jobs.size)return;
-    while(this.generationQueue.length){
+    this.pool.setCapacity(this.store.settings.aiConcurrency);
+    // Drain cancelled/old-book jobs before admitting any work from the next book.
+    if([...this.jobs.values()].some(j=>j.controller.signal.aborted||j.book!==(this.currentBook??this.generationQueue[0])))return;
+    while(this.generationQueue.length&&this.jobs.size<this.store.settings.aiConcurrency){
       const book=this.currentBook??this.generationQueue[0];this.currentBook=book;
       if(book.mapStatus==='error'||book.pages.some(p=>p.status==='error')){this.pauseBook(book.id,'有未完成工作，請按繼續生成重試');continue;}
-      if(!this.preparingBooks.has(book))this.schedule(book);
-      // Missing local images/index prerequisites must not let another book overtake it.
-      break;
+      // Missing prerequisites wait here; never use spare slots for another PDF.
+      if(this.preparingBooks.has(book)||!this.schedule(book))break;
     }
     if(this.activeId&&this.store.books.has(this.activeId))this.activity=this.activityFor(this.store.book(this.activeId));
   }
@@ -124,27 +124,31 @@ export class Engine {
     if(!hasQuestion)for(const page of book.pages){const m=page.messages.find(m=>m.status==='pending');if(m&&page.imageReady&&book.map?.pages.some(p=>p.page===page.number)){
       void this.launch(book,`question:${m.id}`,'question',signal=>this.answer(book,page.number,m,signal),page.number,m);return true;
     }}
-    const n=book.map?nextPage(book):undefined;
+    const bookJobs=[...this.jobs.values()].filter(j=>j.book===book);
+    const reservedIndex=new Set(bookJobs.filter(j=>j.kind==='index').flatMap(j=>j.pages));
+    const reservedLessons=new Set(bookJobs.filter(j=>j.kind==='lesson').flatMap(j=>j.pages));
+    const numbers=book.map?lessonBatchPages(book,this.store.settings.lessonDetail,reservedLessons):[];
     const known=new Set(book.mapChunks.flat().map(p=>p.page));
-    const missing=nextIndexPages(book,known.size?10:5);
-    const indexKey=`${book.id}:index`;
-    const canIndex=book.count>0&&book.mapStatus!=='done'&&book.mapStatus!=='error'&&!this.jobs.has(indexKey)&&(missing.length>0||known.size===book.count);
-    if(n!==undefined&&((this.preferLesson.has(book)&&![...this.jobs.values()].some(j=>j.book===book&&j.kind==='lesson'))||!canIndex)){
+    const indexing=bookJobs.some(j=>j.kind==='index');
+    const missing=nextIndexPages(book,known.size||indexing?10:5,reservedIndex);
+    // An overview depends on every index result and all index-job cleanup, not arrival order.
+    const finalize=known.size===book.count&&!indexing;
+    const canIndex=book.count>0&&book.mapStatus!=='done'&&book.mapStatus!=='error'&&(missing.length>0||finalize);
+    if(numbers.length&&(this.preferLesson.has(book)||!canIndex)){
       this.preferLesson.delete(book);
-      const numbers=lessonBatchPages(book,this.store.settings.lessonDetail);
-      void this.launch(book,`lesson:${n}`,'lesson',signal=>this.lessons(book,numbers,signal),n);return true;
+      void this.launch(book,`lesson:${numbers[0]}`,'lesson',signal=>this.lessons(book,numbers,signal),numbers[0],undefined,numbers);return true;
     }
     if(canIndex){
-      void this.launch(book,'index','index',async signal=>{
+      void this.launch(book,`index:${missing[0]??'overview'}`,'index',async signal=>{
         if(missing.length)await this.indexChunk(book,missing,signal);
         else await this.finalizeMap(book,signal);
         this.preferLesson.add(book);
-      });return true;
+      },undefined,undefined,missing);return true;
     }
     return false;
   }
-  private launch(book:Book,key:string,kind:'lesson'|'index'|'question',run:(signal:AbortSignal)=>Promise<void>,page?:number,message?:Message){
-    const id=`${book.id}:${key}`,job={book,kind,controller:new AbortController(),page,message};this.jobs.set(id,job);this.changed();
+  private launch(book:Book,key:string,kind:'lesson'|'index'|'question',run:(signal:AbortSignal)=>Promise<void>,page?:number,message?:Message,pages:number[]=[]){
+    const id=`${book.id}:${key}`,job={book,kind,controller:new AbortController(),page,message,pages};this.jobs.set(id,job);this.changed();
     return run(job.controller.signal).catch(error=>{
       if(job.controller.signal.aborted||this.store.books.get(book.id)!==book)return;
       if(message)message.status='pending';
@@ -197,6 +201,7 @@ export class Engine {
   }
   private async tracedGenerate(book:Book,priority:number,signal:AbortSignal,kind:ModelTrace['kind'],args:Parameters<Provider['generate']>,started?:()=>void):Promise<string>{
     this.valid(book,signal);
+    this.pool.setCapacity(this.store.settings.aiConcurrency);
     const pages=args[1].map(file=>Number(path.basename(file).match(/^p(\d+)\.jpg$/)?.[1])).filter(n=>Number.isInteger(n)&&n>0);
     const id=this.diagnostics.begin({bookId:book.id,kind,pages,model:args[2]});
     try{const result=await this.pool.run(priority,async()=>{

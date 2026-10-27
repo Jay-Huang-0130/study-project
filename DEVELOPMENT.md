@@ -1,6 +1,6 @@
 # 開發與維護流程
 
-基準：**0.11.0**；更新日期：**2026-10-27**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
+基準：**0.12.0**；更新日期：**2026-10-27**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
 
 ## 1. 開始工作
 

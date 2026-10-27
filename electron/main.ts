@@ -150,7 +150,7 @@ function registerIPC() {
       clean.model = value.model;
     }
     if(value.lessonDetail!==undefined){if(!['concise','standard','detailed'].includes(value.lessonDetail))throw new Error('講解長度無效');clean.lessonDetail=value.lessonDetail;}
-    for(const [key,max] of [['aiConcurrency',1],['pdfWorkers',4]] as const){
+    for(const [key,max] of [['aiConcurrency',6],['pdfWorkers',4]] as const){
       const n=value[key];if(n!==undefined){if(!Number.isInteger(n)||n<1||n>max)throw new Error('並行數超出範圍');clean[key]=n;}
     }
     for(const [key,min,max] of [['uiScale',80,150],['readingFontSize',12,26]] as const){

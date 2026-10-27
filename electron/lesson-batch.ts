@@ -1,11 +1,11 @@
 import type {Book,LessonDetail} from '../src/shared';
 
 /** Bound both page count and expected prose; detailed derivations use smaller batches. */
-export function lessonBatchPages(book:Book,detail:LessonDetail):number[]{
+export function lessonBatchPages(book:Book,detail:LessonDetail,reserved:ReadonlySet<number>=new Set()):number[]{
   const indexed=new Set(book.map?.pages.map(p=>p.page)),result:number[]=[];
   let budget=0;
   for(const page of [...book.pages].sort((a,b)=>a.number-b.number)){
-    if(page.status==='done')continue;
+    if(page.status==='done'||reserved.has(page.number))continue;
     if(page.status!=='pending'||!page.imageReady||!indexed.has(page.number))break;
     const density=book.map?.pages.find(p=>p.page===page.number)?.density??'normal';
     const size={concise:{brief:120,normal:300,dense:600},standard:{brief:150,normal:500,dense:800},detailed:{brief:200,normal:800,dense:1200}}[detail][density];

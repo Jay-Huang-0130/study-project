@@ -1,6 +1,6 @@
-# Study Project Engine：漸進教材理解與單請求多頁串流生成
+# Study Project Engine：漸進教材理解與多頁批次動態並行
 
-> 技術論文式設計說明。對應 **0.11.0**，更新於 **2026-10-27**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
+> 技術論文式設計說明。對應 **0.12.0**，更新於 **2026-10-27**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
 
 ## 摘要
 
@@ -38,7 +38,7 @@ Engine 位於 Electron 主程序，核心是 [engine.ts](../electron/engine.ts)�
 | `P_i` | 第 i 頁的文字、圖像就緒、講稿與問答狀態 | `book.pages[i-1]` |
 | `S_t` | t 時刻已完成詳細索引的頁面集合 | `book.map.pages` |
 | `M_t` | 當時的索引、術語與總覽快照 | `BookMap` |
-| `C` | 模型容量，固定 1（全域） | `settings.aiConcurrency` |
+| `C` | 模型容量，1–6（全域、預設 1） | `settings.aiConcurrency` |
 | `W` | 每個 PDFLoader 的工作緒目標，預設 2、範圍 1–4 | `settings.pdfWorkers` |
 | `J` | 已登記的 Engine 工作，含可能正在等待 Pool 的工作 | `jobs` |
 | `g` | 單次講稿或問答生成識別 | `generationId` |
@@ -109,30 +109,32 @@ score(i) = i
 
 ## 4. 方法：全域單請求與多頁批次
 
-所有 Provider 請求共用容量為 1 的 PriorityPool。0.11.0 移除 0.10.1 加入的固定 5000ms 間隔，前項結束後，就緒工作可直接取得名額；背景 job 清理後約 30ms 喚醒。並不等於遠端必定即時回覆。舊 aiConcurrency 設定仍統一遷移為 1，本次沒有恢復多請求並行，也沒有修改模型或講稿提示。
+所有 Provider 請求共用設定容量 1–6（預設 1）的 PriorityPool。0.11.0 移除 0.10.1 加入的固定 5000ms 間隔，前項結束後，就緒工作可直接取得名額；背景 job 清理後約 30ms 喚醒。並不等於遠端必定即時回覆。0.12.0 恢復 1–6 的合法設定值；只改排程層，不修改模型或講稿提示。
 
 `generationQueue` 以教材物件身分保存本次會話的啟動順序；`prepareBook()` 在等待登入或舊 PDFLoader 停止前預留順位，`resumeBook()` 解除準備鎖。主程序以 intent token 防止等待期間的暫停或刪除被遲到的續作覆蓋。開 App 時 Store 重設 generationStarted，因此不從舊旗標自動產生。
 
 `currentBook` 鎖定本份教材，包含等待圖片、索引、完整總覽及在途 job 清理的時間。完成定義是完整地圖、全部講稿及問答完成；選到最後頁、串流保存最後一頁都不直接換書。正在處理的教材不可拖走；等待項目可拖拉或按上下移。IPC 驗證完整 ID 集合、重複／過期清單及鎖定隊首，拒絕時由 UI 重新取得狀態。
 
-暫停或生成／解析出錯，取消受影響工作、保留完成快取、移出佇列，接著處理下一份；再次手動啟動排到隊尾，重複續作不重複入隊。同一教材內先處理 pending 問答，再交替安排索引與講稿。其他教材的提問先保存 pending，加入隊尾，不超越當前教材。手動概念圖維持獨立流程，仍共享 Pool；不屬於 PDF 自動完成條件。
+暫停或生成／解析出錯，取消受影響工作、保留完成快取、移出佇列，接著處理下一份；再次手動啟動排到隊尾，重複續作不重複入隊。同一教材內先處理 pending 問答，再交替安排索引與講稿，直到已登記 job 達容量或沒有就緒工作。其他教材的提問先保存 pending，加入隊尾，不超越當前教材。手動概念圖維持獨立流程，仍共享 Pool；不屬於 PDF 自動完成條件。
 
 ~~~text
 WAKE:
   prune deleted / paused / fully completed books (retain any live job)
   append explicitly enrolled in-session books only
-  if stopped / probe / unauthenticated / live job: return
-  pin current book, or choose queue head
-  if failed: pause and remove it; continue with next book
-  if awaiting authentication / old loader shutdown: wait
-  if pending eligible question: enqueue question
-  else if ready lessons and (preferLesson or no index work): enqueue lesson batch
-  else if missing index pages: enqueue first up to 5 / later up to 10 pages
-  else if all indexed but map unfinished: enqueue overview
-  if prerequisites missing: wait here; do not rotate to another book
+  if stopped / probe / unauthenticated / cancelled or other-book job still draining: return
+  apply current capacity; do not cancel in-flight calls when reducing it
+  while registered jobs < capacity:
+    pin current book, or choose queue head
+    if failed: pause and remove it; continue with next book
+    if awaiting authentication / old loader shutdown: wait
+    if pending eligible question: enqueue question
+    else if ready lessons and (preferLesson or no index work): enqueue lesson batch
+    else if missing index pages: enqueue first up to 5 / later up to 10 pages
+    else if all indexed AND no live index job AND map unfinished: enqueue unique overview
+    if prerequisites missing: wait here; do not rotate to another book
 ~~~
 
-講稿批次依升序選最前方 pending 頁，跳過 done 快取；遇到 running、缺圖或缺索引即停止，不跨過缺少前置資料的頁面。最多 5 頁，另依講解偏好與密度累加預估篇幅，軟預算 3000 字；例如詳細 dense 預估每頁 1200 字，最多 2 頁。這是分組啟發式，不是 token 上限或模型實際長度保證。
+講稿批次依升序選最前方 pending 頁，跳過 done 快取與已保留的在途頁碼；遇到沒有 lease 的 running、缺圖或缺索引即停止，不跨過缺少前置資料的頁面。最多 5 頁，另依講解偏好與密度累加預估篇幅，軟預算 3000 字；例如詳細 dense 預估每頁 1200 字，最多 2 頁。這是分組啟發式，不是 token 上限或模型實際長度保證。
 
 一批開始後，各目標頁共用 generationId 並標 running。一個 Provider 請求依序輸出多個獨立 JSON 物件；每個物件只有 page 與 lesson（完整 Markdown 字串），不使用需要等待收尾的外層陣列。講稿不是多 agent 工作，也不在批內呼叫下一個 agent。
 
@@ -143,9 +145,9 @@ WAKE:
 
 LessonBatchStream 接收累積串流，辨識 JSON 字串跳脫及巢狀大括號，不依單次 delta 或簡單換行切頁。每個完整物件須符合預期頁碼、順序、非空講稿與欄位規則。每頁通過後立即持久化為 done，並通知 renderer；其他頁仍 running。最後回覆再次核對，不重複保存，若修改先前已輸出的內容則拒絕。必要公式、Markdown 與換行由 JSON 字串正確跳脫，顯示前還原。
 
-整批結束才取得下一個 AI 請求，但閱讀不需等整批。若截斷、缺頁、重複、錯序或斷線，受影響教材暫停，已提交頁保留，未完成頁恢復 pending；手動繼續重新分組最早缺頁。這不是從模型同一個 token 接續。
+每個批次占一個名額，整批結束即釋放並補下一個就緒工作，不等待其他批次結束；閱讀不需等整批。若截斷、缺頁、重複、錯序或斷線，受影響教材暫停，已提交頁保留，未完成頁恢復 pending；手動繼續重新分組最早缺頁。這不是從模型同一個 token 接續。
 
-取消會釋放本機工作並送遠端中斷；網路尚未確認中斷或 turnId 晚到時，不能承諾遠端運算零時間重疊。正常執行的本機 Provider 呼叫嚴格共用一個名額。
+取消會釋放本機工作並送遠端中斷；網路尚未確認中斷或 turnId 晚到時，不能承諾遠端運算零時間重疊。正常執行的本機 Provider 呼叫受設定的全域容量限制；調低後現有請求可能暫時多於新上限，不會為此取消。
 
 ## 5. 方法：每次請求的上下文建構
 
@@ -250,7 +252,7 @@ stateDiagram-v2
 
 | 證據 | 已支持的結論 | 不能推出的結論 |
 | --- | --- | --- |
-| 0.11.0 的 119 項自動測試，含可控制 Provider | 教材 FIFO／重排、單請求多頁串流、取消續跑、錯頁隔離、管道及快取符合測試條件 | 真實模型準確率、真實網路首段延遲 |
+| 0.12.0 的 129 項自動測試，含可控制 Provider | 教材 FIFO／重排、1–6 容量動態補位、多頁串流、取消續跑、錯頁隔離、管道及快取符合測試條件 | 真實模型準確率、真實網路首段延遲 |
 | 多頁分段輸出與問題優先測試 | 結果依原頁保存；等待問題可先於背景佇列 | 已在途請求被搶占、所有工作都有等待上限 |
 | PDF Worker 單次歷史量測：191 頁、1 緒 14.67s、2 緒 8.04s | 該機、該教材的本機圖像渲染約快 1.82 倍 | AI 推論也快 1.82 倍、所有電腦都有相同改善 |
 | 0.7.1 預覽對照與重載測試 | renderer PDF 生命週期與錯誤恢復修補有效 | Engine 教學品質因此提高 |
@@ -320,3 +322,11 @@ Reviews 將原頁擷取、每層組別及最終整合都納入計畫步數，各
 ## 19. 分階段可觀測性（0.9.4）
 
 將單次請求分為 queued → connecting → thread → starting → waiting → receiving → done/error/cancelled。使用單調時間記錄階段首次到達，不以字串狀態猜測耗時。開始事件或 RPC 確認皆可接受；第一段回覆早於確認時，不倒退階段，未知確認耗時留空。容量排隊、服務啟動、對話建立與模型啟動等待可以分辨，但無法從客戶端事件拆出遠端排隊、網路與模型思考各自時間。此版本先取得量測證據，不宣稱速度已提高。
+
+## 0.12.0：批次並行的 lease 與完成柵欄
+
+`jobs.pages` 在派工前保存批次頁碼，直到整個 job finally 才釋放。索引選頁跳過已完成與已保留頁碼；講稿分批跳過 done 與本引擎已保留頁碼，對無 lease 的 running 或缺圖／缺索引仍停止，不跳過未知缺口。各批次保持升序，但不同批次可亂序完成。
+
+索引結果每批先驗證再提交，partialMap 依頁碼排序；只有所有索引結果已提交且無任何 index job 時，才能派唯一 overview。講稿使用送出時的上下文文字、圖片及 generationId，後續索引更新不改寫在途請求。最後一頁串流保存不釋放整份教材，仍須全部 job 收尾才換下一份。
+
+任一批次故障仍暫停該教材、取消兄弟批次、保留已提交頁及索引；復原排尾。取消中的 job 全部清理前不派新工作，避免快速續作重複保留同一頁。問答與手動概念圖共享 PriorityPool，不另開超額名額。概念圖內部仍串行；容量是上限，不是每一階段能滿載的承諾。

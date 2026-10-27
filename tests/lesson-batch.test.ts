@@ -30,14 +30,14 @@ test('batch selection bounds dense prose, preserves cached holes and waits for e
   assert.deepEqual(lessonBatchPages(f.book,'concise'),[1,2,3,4,5]);f.book.pages[1].status='done' as any;
   assert.deepEqual(lessonBatchPages(f.book,'concise'),[1,3,4,5,6]);f.book.pages[3].imageReady=false;
   assert.deepEqual(lessonBatchPages(f.book,'concise'),[1,3]);f.book.pages[3].imageReady=true;for(const p of f.book.map!.pages)p.density='dense';
-  assert.deepEqual(lessonBatchPages(f.book,'detailed'),[1,3]);assert.equal(normalizeSettings({aiConcurrency:6}).aiConcurrency,1);
+  assert.deepEqual(lessonBatchPages(f.book,'detailed'),[1,3]);assert.equal(normalizeSettings({aiConcurrency:6}).aiConcurrency,6);
  }finally{f.close();}
 });
 test('one serial batch streams saved pages before request completion and navigation never changes dispatch',async()=>{
  const f=fixture();let engine:Engine|undefined;let release:(s:string)=>void=()=>{},delta:((s:string)=>void)|undefined;
  const prompts:string[]=[];let active=0,max=0;
  try{
-  f.store.settings.aiConcurrency=6; // Even a stale in-memory setting cannot enable parallel calls.
+  f.store.settings.aiConcurrency=1; // Capacity one retains the serial workflow.
   const provider:Provider={generate:async(prompt,_images,_m,_i,onDelta)=>{prompts.push(prompt);active++;max=Math.max(max,active);delta=onDelta;return new Promise<string>(r=>release=s=>{active--;r(s);});}};
   engine=new Engine(f.store,provider,()=>{},()=>{});engine.authenticated=true;engine.activeId=f.book.id;engine.wake();await until(()=>prompts.length===1);
   f.book.currentPage=8;engine.wake();delta!(row(1));assert.equal(f.book.pages[0].status,'done');assert.equal(f.book.pages[1].status,'running');
