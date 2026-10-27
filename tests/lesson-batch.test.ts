@@ -1,7 +1,10 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';import os from 'node:os';import path from 'node:path';
-import {Store,normalizeSettings} from '../electron/store';import {Engine,type Provider} from '../electron/engine';
+import {Store,normalizeSettings} from '../electron/store';import {Engine as BaseEngine,type Provider} from '../electron/engine';
 import {LessonBatchStream,lessonBatchPages} from '../electron/lesson-batch';
+// Timing is verified separately with controlled clocks; workflow fixtures skip real cooldowns.
+class Engine extends BaseEngine { constructor(...args:ConstructorParameters<typeof BaseEngine>){super(args[0],args[1],args[2],args[3],args[4],0);} }
+
 const row=(page:number,lesson=`講稿 ${page}`)=>JSON.stringify({page,lesson});
 async function until(f:()=>boolean){const end=Date.now()+4000;while(!f()){if(Date.now()>end)throw Error('Timed out');await new Promise(r=>setTimeout(r,5));}}
 function fixture(count=8){

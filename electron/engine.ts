@@ -60,7 +60,7 @@ export class Engine {
   private stopping=false;
   private cursor=0;
   private pool:PriorityPool;
-  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{}){this.pool=new PriorityPool(1,changed);}
+  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{},requestGapMs=5000){this.pool=new PriorityPool(1,changed,requestGapMs);}
   get progress(){return {activeLessons:[...this.jobs.values()].filter(j=>j.kind==='lesson').length,indexing:[...this.jobs.values()].some(j=>j.kind==='index'),modelActive:this.pool.snapshot.active,modelQueued:this.pool.snapshot.queued};}
   bookState(book:Book):'running'|'paused'|'complete'|'waiting'{
     if(book.generationPaused)return 'paused';

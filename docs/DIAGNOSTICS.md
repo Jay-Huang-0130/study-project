@@ -22,3 +22,5 @@ ModelDiagnostics 使用單調時計與匿名隨機請求 ID，儲存教材內容
 IPC diagnostics / exportDiagnostics 使用既有主畫面來源檢查。原始碼：electron/diagnostics.ts、engine.ts、codex.ts、src/GenerationDiagnostics.tsx。觀察者例外會被隔離，不能讓生成失敗或重送。
 
 0.10.0 的講稿顯示為「分批講稿」。附圖頁碼包含上下文參考，並非全部都要生成的目標頁；一個請求可能在尚未完成前已有多頁講稿保存，因此請求數與完成頁數不相同。AI 容量固定 1。
+
+0.10.1 新增每次請求結束後的全域 5 秒間隔，列入「等待 AI 容量／容量等待」。等待期間 active 為 0、queued 大於 0 是正常狀態；不代表遠端限流。批次內每頁輸出不等待 5 秒。

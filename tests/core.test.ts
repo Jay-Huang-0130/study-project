@@ -6,9 +6,12 @@ import path from 'node:path';
 import { lessonGuide } from '../electron/lesson-style';
 import { normalizeSettings } from '../electron/store';
 import { Store } from '../electron/store';
-import { Engine, nextPage, nextIndexPages, validateMapChunk, acceptsResult, type Provider } from '../electron/engine';
+import { Engine as BaseEngine, nextPage, nextIndexPages, validateMapChunk, acceptsResult, type Provider } from '../electron/engine';
 import type { Book } from '../src/shared';
 import { PriorityPool } from '../electron/priority-pool';
+
+// Timing is verified separately with controlled clocks; workflow fixtures skip real cooldowns.
+class Engine extends BaseEngine { constructor(...args:ConstructorParameters<typeof BaseEngine>){super(args[0],args[1],args[2],args[3],args[4],0);} }
 
 function batchReply(prompt:string,lesson:string){
  const match=prompt.match(/唯一目標頁碼（依序）：([\d、]+)/);return match?match[1].split('、').map(n=>JSON.stringify({page:Number(n),lesson})).join('\n'):lesson;
