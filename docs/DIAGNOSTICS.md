@@ -40,3 +40,15 @@ IPC diagnostics / exportDiagnostics 使用既有主畫面來源檢查。原始�
 判讀：明確收到 HTTP 429／rateLimitExceeded 才有服務回報的限流證據；收到 reasoning 代表有活動；收到文字但沒有保存須核對解析與結束事件。沒有任何回覆仍無法僅靠客戶端證明故障在遠端。成功／失敗對照是定位線索，非統計或責任判定。
 
 協定依程式打包的 Codex 0.163.0 generate-json-schema 驗證，並對照官方文件 https://learn.chatgpt.com/docs/app-server 。
+
+## 0.10.3 本機管道傳送確認
+
+舊「App 已送生成指令」更名為「準備送出生成指令」，不再暗示已送達。新增開始寫入、背壓、管道寫入完成／失敗四種事件。完成是 Node Writable 的 write callback 成功，不等於 Codex 已讀取、接受或遠端已開始運算；RPC／turn 確認仍為獨立事件。
+
+RpcWriter 對每個本機管道採 FIFO，檢查程序存活與 pipe writable/destroyed/ended/finished；寫入 false 代表背壓，保留該次寫入、不重送，後續等待 drain。監聽 error／close，涵蓋同步與非同步失敗；單筆等待寫入或寫入無進展超過 30 秒，令該傳送器失效、暫停相關工作並關閉失效的專用子程序，等待使用者重新確認連線，不自動重播模型請求。原有 8 分鐘模型期限與 5 秒請求間隔不變。
+
+待回覆 RPC 顯示安全方法名、單調時計等待時間、等待寫入／正在寫入／背壓／已寫入等狀態。未知方法以 other 取代，不匯出參數或內容。暫停會撤銷尚未送出的排隊指令；若已開始寫入，不能假設 bytes 已撤回，仍保留精確 turnId 晚到中斷邏輯。已取消或已完成的 RPC 不會被晚到寫入 callback 重新建立。
+
+程序與 stdout 事件綁定當次 child，舊 child 的關閉或資料不能影響新的連線。參考 Node 官方 Writable write callback／drain 行為：https://nodejs.org/download/release/latest-jod/docs/api/stream.html#writablewritechunk-encoding-callback 。
+
+這次修補能攔截本機傳送失敗，但沒有證據能據此認定先前所有啟動等待都由此造成，亦不能以成功寫入排除 Codex 服務或遠端等待。

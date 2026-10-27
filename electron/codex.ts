@@ -7,6 +7,7 @@ import {cancelled} from './cancellation';
 import { EventEmitter } from 'node:events';
 import type {ModelActivity,ModelEvent} from '../src/shared';
 import {modelError,safeError} from './model-events';
+import {RpcWriter,pipeError,type WriteEvent,type WriteStage} from './rpc-writer';
 
 const require = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
 type RPC = { id?: number; method?: string; params?: any; result?: any; error?: { code?:number;message: string } };
@@ -35,39 +36,48 @@ export function codexExecutable(): string {
 export class CodexClient extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
   private sequence = 0;
-  private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, {method:string;startedAt:number;writeState:WriteStage;resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private writer?:RpcWriter;
   private starting?: Promise<void>;
   private wire={lines:0,invalidLines:0,unmatchedReplies:0,lastInputAt:undefined as string|undefined,events:{} as Record<string,number>};
-  get transport(){return {...this.wire,events:{...this.wire.events},pendingRPCs:this.pending.size,processRunning:!!this.child&&this.child.exitCode===null};}
+  get transport(){
+    const allowed=['initialize','thread/start','turn/start','turn/interrupt','thread/unsubscribe','model/list','account/read','account/login/start','account/logout','account/rateLimits/read'];
+    return {...this.wire,events:{...this.wire.events},pendingRPCs:this.pending.size,processRunning:!!this.child&&!this.child.killed&&this.child.exitCode===null&&this.child.signalCode===null,
+      outboundQueued:this.writer?.snapshot.queued??0,pipeBlocked:this.writer?.snapshot.blocked??false,
+      pending:[...this.pending.values()].map(p=>({method:allowed.includes(p.method)?p.method:'other',ageMs:Math.max(0,performance.now()-p.startedAt),writeState:p.writeState}))};
+  }
   constructor(public home: string, public cwd: string,private version = 'development') { super(); }
   async start() {
     if (this.starting) return this.starting;
-    this.starting = this.boot().catch(e => { this.starting = undefined; throw e; });
-    return this.starting;
+    const request=this.boot().catch(e => { if(this.starting===request)this.starting = undefined; throw e; });
+    this.starting=request;return request;
   }
   private async boot() {
     mkdirSync(this.home, { recursive: true }); mkdirSync(this.cwd, { recursive: true });
     // Dedicated credentials, separate from textbook data and other Codex projects.
     writeFileSync(path.join(this.home, 'config.toml'), 'cli_auth_credentials_store = "keyring"\n');
-    this.child = spawn(codexExecutable(), ['app-server', '--listen', 'stdio://', '-c', 'shell_tool="disabled"', '-c', 'web_search="disabled"', '-c', 'tools.disable_defaults=true', '--disable', 'shell_tool', '--disable', 'multi_agent', '--disable', 'apps', '--disable', 'hooks'], {
+    const child = spawn(codexExecutable(), ['app-server', '--listen', 'stdio://', '-c', 'shell_tool="disabled"', '-c', 'web_search="disabled"', '-c', 'tools.disable_defaults=true', '--disable', 'shell_tool', '--disable', 'multi_agent', '--disable', 'apps', '--disable', 'hooks'], {
       env: { ...process.env, OPENAI_API_KEY: undefined, CODEX_API_KEY: undefined, CODEX_HOME: this.home }, cwd: this.cwd, windowsHide: true, stdio: 'pipe',
     });
-    this.child.on('error', e => this.failed(new Error(`無法啟動 Codex：${e.message}`)));
-    this.child.on('exit', () => this.failed(new Error('模型連線已中斷，請重新連線。')));
+    this.writer?.dispose();this.child=child;
+    this.writer=new RpcWriter(child.stdin,()=>this.child===child&&!child.killed&&child.exitCode===null&&child.signalCode===null,error=>{if(this.child!==child)return;this.failed(error);child.kill();});
+    child.on('error', () => {if(this.child===child)this.failed(pipeError('processUnavailable'));});
+    child.on('exit', () => {if(this.child===child)this.failed(pipeError('processUnavailable'));});
     // Never forward raw stderr: it can contain provider or authentication details.
-    this.child.stderr.resume();
-    createInterface({ input: this.child.stdout }).on('line', line => {
+    child.stderr.resume();
+    createInterface({ input: child.stdout }).on('line', line => {
+      if(this.child!==child)return;
       this.wire.lines++;this.wire.lastInputAt=new Date().toISOString();
       let msg: RPC; try { msg = JSON.parse(line); } catch { this.wire.invalidLines++;return; }
       this.receive(msg);
     });
     await this.call('initialize', { clientInfo: { name: 'study_project', title: 'Study Project', version: this.version }, capabilities: { experimentalApi: true } });
-    this.send({ method: 'initialized' });
+    await this.send({ method: 'initialized' });
   }
   private receive(msg:RPC){
     if(msg.id!==undefined&&msg.method){
       // A tutor must not execute commands, edit files, or invoke tools.
-      this.send({id:msg.id,error:{code:-32601,message:'Tools are disabled in Study Project.'}});
+      void this.send({id:msg.id,error:{code:-32601,message:'Tools are disabled in Study Project.'}}).catch(()=>{});
     }else if(msg.id!==undefined){
       const waiting=this.pending.get(msg.id);if(!waiting){this.wire.unmatchedReplies++;return;}
       if(msg.error)waiting.reject(modelError(msg.error));else waiting.resolve(msg.result);
@@ -77,22 +87,30 @@ export class CodexClient extends EventEmitter {
     }
   }
   private failed(error: Error) {
+    this.writer?.dispose();
     for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
     this.pending.clear(); this.starting = undefined; this.emit('connectionError', error.message);
   }
-  private send(value: RPC) { this.child?.stdin.write(JSON.stringify(value) + '\n'); }
-  call(method: string, params: unknown = {}, timeout = 60_000,signal?:AbortSignal): Promise<any> {
+  private send(value: RPC,signal?:AbortSignal,onWrite?:(event:WriteEvent)=>void):Promise<void> {
+    const fail=(code:'processUnavailable'|'pipeUnavailable')=>{try{onWrite?.({stage:'failed',bytes:0,code});}catch{/* Observer only. */}return Promise.reject(pipeError(code));};
+    if(!this.child||this.child.killed||this.child.exitCode!==null||this.child.signalCode!==null)return fail('processUnavailable');
+    if(!this.writer)return fail('pipeUnavailable');
+    return this.writer.write(JSON.stringify(value)+'\n',signal,onWrite);
+  }
+  call(method: string, params: unknown = {}, timeout = 60_000,signal?:AbortSignal,onWrite?:(event:WriteEvent)=>void): Promise<any> {
     signal?.throwIfAborted();
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const cleanup=()=>{clearTimeout(timer);this.pending.delete(id);signal?.removeEventListener('abort',abort);};
-      const fail=(error:Error)=>{cleanup();reject(error);};
+      let settled=false;const writeController=new AbortController();
+      const cleanup=()=>{clearTimeout(timer);if(entry.writeState==='queued')writeController.abort();this.pending.delete(id);signal?.removeEventListener('abort',abort);};
+      const fail=(error:Error)=>{if(settled)return;settled=true;cleanup();reject(error);};
       const abort=()=>fail(cancelled());
       const timer = setTimeout(() => fail(new Error(`${method} 等待逾時，請重試。`)), timeout);
-      this.pending.set(id, { resolve:value=>{cleanup();resolve(value);}, reject:fail, timer });
+      const entry={method,startedAt:performance.now(),writeState:'queued' as WriteStage,resolve:(value:any)=>{if(settled)return;settled=true;cleanup();resolve(value);},reject:fail,timer};
+      this.pending.set(id,entry);
       signal?.addEventListener('abort',abort,{once:true});
       if(signal?.aborted){abort();return;}
-      try{this.send({ id, method, params });}catch(error){fail(error instanceof Error?error:new Error(String(error)));}
+      try{void Promise.resolve(this.send({ id, method, params },writeController.signal,event=>{entry.writeState=event.stage;try{onWrite?.(event);}catch{/* Observer only. */}})).catch(fail);}catch(error){fail(error instanceof Error?error:new Error(String(error)));}
     });
   }
   async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown, signal?:AbortSignal,onActivity?:(phase:ModelActivity)=>void,onEvent?:(event:ModelEvent)=>void): Promise<string> {
@@ -114,15 +132,15 @@ export class CodexClient extends EventEmitter {
     return new Promise<string>((resolve, reject) => {
       const startController=new AbortController();
       let unsubscribed=false;const unsubscribe=()=>{if(unsubscribed)return;unsubscribed=true;void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});};
-      let turnId:string|undefined,stopRequested=false,interrupted=false;
+      let turnId:string|undefined,stopRequested=false,interrupted=false,writeState:WriteStage|undefined;
       const detach=()=>{this.off('notification',handle);this.off('connectionError',disconnected);};
       const interrupt=()=>{if(!turnId||interrupted)return;interrupted=true;detach();startController.abort();event({type:'interrupt-sent'});void this.call('turn/interrupt',{threadId:thread.id,turnId},5000).then(()=>event({type:'interrupt-confirmed'})).catch(()=>event({type:'local-error'})).finally(unsubscribe);};
       const finish = (error?: Error) => {
         if(settled)return;settled=true;signal?.removeEventListener('abort',abort);clearTimeout(timer);
-        if(stopRequested){if(!turnId)event({type:'cleanup-pending'});interrupt();}else{detach();startController.abort();unsubscribe();}
+        if(stopRequested){if(!turnId&&writeState!=='queued')event({type:'cleanup-pending'});interrupt();}else{detach();startController.abort();unsubscribe();}
         error?reject(error):resolve(text);
       };
-      const abort=()=>{event({type:'cancelled'});stopRequested=true;finish(cancelled());};
+      const abort=()=>{event({type:'cancelled'});stopRequested=true;finish(cancelled());if(!turnId&&writeState==='queued'){startController.abort();detach();unsubscribe();}};
       const disconnected = (message: string) => {event({type:'transport-closed'});finish(new Error(message));detach();startController.abort();};
       const commentary=new Set<string>();
       const handle = (method: string, params: any) => {
@@ -160,7 +178,10 @@ export class CodexClient extends EventEmitter {
       void this.call('turn/start', {
         threadId: thread.id, input: [{ type: 'text', text: prompt, text_elements: [] }, ...images.map(p => ({ type: 'localImage', path: p }))],
         ...(schema ? { outputSchema: schema } : {}),
-      },TURN_TIMEOUT_MS+LATE_START_GRACE_MS,startController.signal).then(r => {event({type:'rpc-accepted'});turnId=r.turn.id;if(stopRequested)interrupt();else if(!settled)accept();}).catch(error=>{
+      },TURN_TIMEOUT_MS+LATE_START_GRACE_MS,startController.signal,write=>{
+        writeState=write.stage;
+        if(write.stage!=='queued')event({type:write.stage==='writing'?'pipe-write-started':write.stage==='written'?'pipe-write-complete':write.stage==='blocked'?'pipe-backpressure':'pipe-write-failed',bytes:write.bytes,...(write.code?{code:write.code}:{})});
+      }).then(r => {event({type:'rpc-accepted'});turnId=r.turn.id;if(stopRequested)interrupt();else if(!settled)accept();}).catch(error=>{
         if(startController.signal.aborted)return;
         event({type:'local-error',...((error as any).diagnostic??{})});
         finish(error);detach();unsubscribe();
@@ -170,6 +191,7 @@ export class CodexClient extends EventEmitter {
   async close() {
     const child = this.child;
     if (!child || child.exitCode !== null) return;
+    this.writer?.dispose();
     await new Promise<void>(resolve => {
       const timer = setTimeout(() => { child.kill(); resolve(); },3000);
       child.once('exit',() => { clearTimeout(timer); resolve(); });
