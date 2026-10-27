@@ -5,7 +5,8 @@ import { mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import {cancelled} from './cancellation';
 import { EventEmitter } from 'node:events';
-import type {ModelActivity} from '../src/shared';
+import type {ModelActivity,ModelEvent} from '../src/shared';
+import {modelError,safeError} from './model-events';
 
 const require = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
 type RPC = { id?: number; method?: string; params?: any; result?: any; error?: { code?:number;message: string } };
@@ -36,6 +37,8 @@ export class CodexClient extends EventEmitter {
   private sequence = 0;
   private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private starting?: Promise<void>;
+  private wire={lines:0,invalidLines:0,unmatchedReplies:0,lastInputAt:undefined as string|undefined,events:{} as Record<string,number>};
+  get transport(){return {...this.wire,events:{...this.wire.events},pendingRPCs:this.pending.size,processRunning:!!this.child&&this.child.exitCode===null};}
   constructor(public home: string, public cwd: string,private version = 'development') { super(); }
   async start() {
     if (this.starting) return this.starting;
@@ -54,7 +57,8 @@ export class CodexClient extends EventEmitter {
     // Never forward raw stderr: it can contain provider or authentication details.
     this.child.stderr.resume();
     createInterface({ input: this.child.stdout }).on('line', line => {
-      let msg: RPC; try { msg = JSON.parse(line); } catch { return; }
+      this.wire.lines++;this.wire.lastInputAt=new Date().toISOString();
+      let msg: RPC; try { msg = JSON.parse(line); } catch { this.wire.invalidLines++;return; }
       this.receive(msg);
     });
     await this.call('initialize', { clientInfo: { name: 'study_project', title: 'Study Project', version: this.version }, capabilities: { experimentalApi: true } });
@@ -65,9 +69,12 @@ export class CodexClient extends EventEmitter {
       // A tutor must not execute commands, edit files, or invoke tools.
       this.send({id:msg.id,error:{code:-32601,message:'Tools are disabled in Study Project.'}});
     }else if(msg.id!==undefined){
-      const waiting=this.pending.get(msg.id);if(!waiting)return;
-      if(msg.error)waiting.reject(new Error(msg.error.message));else waiting.resolve(msg.result);
-    }else if(msg.method)this.emit('notification',msg.method,msg.params);
+      const waiting=this.pending.get(msg.id);if(!waiting){this.wire.unmatchedReplies++;return;}
+      if(msg.error)waiting.reject(modelError(msg.error));else waiting.resolve(msg.result);
+    }else if(msg.method){
+      const key=['turn/started','turn/completed','item/started','item/completed','item/agentMessage/delta','item/reasoning/summaryTextDelta','item/reasoning/textDelta','error'].includes(msg.method)?msg.method:'other';
+      this.wire.events[key]=(this.wire.events[key]??0)+1;this.emit('notification',msg.method,msg.params);
+    }
   }
   private failed(error: Error) {
     for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
@@ -88,8 +95,9 @@ export class CodexClient extends EventEmitter {
       try{this.send({ id, method, params });}catch(error){fail(error instanceof Error?error:new Error(String(error)));}
     });
   }
-  async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown, signal?:AbortSignal,onActivity?:(phase:ModelActivity)=>void): Promise<string> {
+  async generate(prompt: string, images: string[], model: string, instructions: string, onDelta?: (text: string) => void, schema?: unknown, signal?:AbortSignal,onActivity?:(phase:ModelActivity)=>void,onEvent?:(event:ModelEvent)=>void): Promise<string> {
     const report=(phase:ModelActivity)=>{try{onActivity?.(phase);}catch{/* Observability must not affect model work. */}};
+    const event=(value:ModelEvent)=>{try{onEvent?.(value);}catch{/* Diagnostic observers cannot interrupt generation. */}};
     signal?.throwIfAborted();
     report('connecting');
     await this.start();signal?.throwIfAborted();
@@ -98,6 +106,7 @@ export class CodexClient extends EventEmitter {
       ...(model ? { model } : {}), ephemeral: true, cwd: this.cwd, approvalPolicy: 'never', sandbox: 'read-only',
       baseInstructions: instructions, config: { shell_tool: 'disabled', web_search: 'disabled', 'tools.disable_defaults': true },
     });
+    event({type:'thread-created'});
     if(signal?.aborted){void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});throw cancelled();}
     let text = ''; let settled = false; let timer: NodeJS.Timeout;let hasOutput=false,accepted=false;
     const accept=()=>{if(accepted)return;accepted=true;if(!hasOutput)report('waiting');};
@@ -107,24 +116,37 @@ export class CodexClient extends EventEmitter {
       let unsubscribed=false;const unsubscribe=()=>{if(unsubscribed)return;unsubscribed=true;void this.call('thread/unsubscribe',{threadId:thread.id},5000).catch(()=>{});};
       let turnId:string|undefined,stopRequested=false,interrupted=false;
       const detach=()=>{this.off('notification',handle);this.off('connectionError',disconnected);};
-      const interrupt=()=>{if(!turnId||interrupted)return;interrupted=true;detach();startController.abort();void this.call('turn/interrupt',{threadId:thread.id,turnId},5000).catch(()=>{}).finally(unsubscribe);};
+      const interrupt=()=>{if(!turnId||interrupted)return;interrupted=true;detach();startController.abort();event({type:'interrupt-sent'});void this.call('turn/interrupt',{threadId:thread.id,turnId},5000).then(()=>event({type:'interrupt-confirmed'})).catch(()=>event({type:'local-error'})).finally(unsubscribe);};
       const finish = (error?: Error) => {
         if(settled)return;settled=true;signal?.removeEventListener('abort',abort);clearTimeout(timer);
-        if(stopRequested){interrupt();}else{detach();startController.abort();unsubscribe();}
+        if(stopRequested){if(!turnId)event({type:'cleanup-pending'});interrupt();}else{detach();startController.abort();unsubscribe();}
         error?reject(error):resolve(text);
       };
-      const abort=()=>{stopRequested=true;finish(cancelled());};
-      const disconnected = (message: string) => {finish(new Error(message));detach();startController.abort();};
+      const abort=()=>{event({type:'cancelled'});stopRequested=true;finish(cancelled());};
+      const disconnected = (message: string) => {event({type:'transport-closed'});finish(new Error(message));detach();startController.abort();};
+      const commentary=new Set<string>();
       const handle = (method: string, params: any) => {
         if (params?.threadId !== thread.id) return;
         // Notifications can prove acceptance before the turn/start RPC reply arrives.
         // A cancelled, unacknowledged start keeps only this guarded late-ID path.
-        if(method==='turn/started'&&params.turn?.id){turnId=params.turn.id;if(stopRequested)interrupt();else{accept();startController.abort();}}
+        if(method==='turn/started'&&params.turn?.id){event({type:'turn-started'});turnId=params.turn.id;if(stopRequested)interrupt();else{accept();startController.abort();}}
         if(settled){if(method==='turn/completed'){detach();startController.abort();unsubscribe();}return;}
-        if (method === 'item/agentMessage/delta') {if(params.delta)output();text += params.delta; onDelta?.(text); }
-        if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase !== 'commentary') {text = params.item.text;if(text)output();}
+        if(params.turnId&&typeof params.turnId==='string')turnId??=params.turnId;
+        if(method==='item/started'){
+          event({type:'item-started'});if(turnId)accept();
+          if(params.item?.phase==='commentary'&&params.item?.id)commentary.add(params.item.id);
+          if(params.item?.type==='reasoning')event({type:'reasoning'});
+        }
+        if(['item/reasoning/summaryTextDelta','item/reasoning/textDelta'].includes(method)){event({type:'reasoning'});if(turnId)accept();}
+        if(method==='error'){
+          event({type:'upstream-error',...safeError(params.error),willRetry:params.willRetry===true});
+          if(params.willRetry===false)finish(modelError(params.error));
+        }
+        if (method === 'item/agentMessage/delta'&&!commentary.has(params.itemId)) {if(params.delta){event({type:'content'});if(turnId)accept();output();}text += params.delta; onDelta?.(text); }
+        if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase !== 'commentary') {text = params.item.text;if(text){event({type:'content'});output();}}
         if (method === 'turn/completed') {
-          if (params.turn.status !== 'completed') finish(new Error(params.turn.error?.message ?? '生成未完成，請重試。'));
+          event({type:'completed',...safeError(params.turn.error)});
+          if (params.turn.status !== 'completed') finish(modelError(params.turn.error));
           else if (!text.trim()) finish(new Error('模型未回傳講解內容。'));
           else finish();
         }
@@ -134,11 +156,13 @@ export class CodexClient extends EventEmitter {
       signal?.addEventListener('abort',abort,{once:true});
       if(signal?.aborted){abort();detach();unsubscribe();return;}
       report('starting');
+      event({type:'request-sent'});
       void this.call('turn/start', {
         threadId: thread.id, input: [{ type: 'text', text: prompt, text_elements: [] }, ...images.map(p => ({ type: 'localImage', path: p }))],
         ...(schema ? { outputSchema: schema } : {}),
-      },TURN_TIMEOUT_MS+LATE_START_GRACE_MS,startController.signal).then(r => {turnId=r.turn.id;if(stopRequested)interrupt();else if(!settled)accept();}).catch(error=>{
+      },TURN_TIMEOUT_MS+LATE_START_GRACE_MS,startController.signal).then(r => {event({type:'rpc-accepted'});turnId=r.turn.id;if(stopRequested)interrupt();else if(!settled)accept();}).catch(error=>{
         if(startController.signal.aborted)return;
+        event({type:'local-error',...((error as any).diagnostic??{})});
         finish(error);detach();unsubscribe();
       });
     });

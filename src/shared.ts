@@ -3,8 +3,15 @@ export type GenerationState = 'running' | 'paused' | 'complete' | 'waiting';
 export type LessonDetail = 'concise' | 'standard' | 'detailed';
 export type ModelPhase='queued'|'connecting'|'thread'|'starting'|'waiting'|'receiving'|'done'|'error'|'cancelled';
 export type ModelActivity=Exclude<ModelPhase,'queued'|'done'|'error'|'cancelled'>;
-export interface ModelTrace {id:string;bookId:string;kind:'lesson'|'index'|'overview'|'question'|'review';pages:number[];model:string;createdAt:string;phase:ModelPhase;lastPhase?:ModelActivity|'queued';elapsedMs:number;phaseMs:number;marks:Partial<Record<ModelPhase,number>>;failure?:'timeout'|'network'|'quota'|'auth'|'other'}
-export interface GenerationDiagnostics {records:ModelTrace[];preparation?:{count:number;textReady:boolean;images:number;indexed:number;lessons:number;mapComplete:boolean;paused:boolean;started:boolean};limit:number}
+export type ModelEventType='thread-created'|'request-sent'|'rpc-accepted'|'turn-started'|'item-started'|'reasoning'|'content'|'completed'|'upstream-error'|'local-error'|'cancelled'|'interrupt-sent'|'interrupt-confirmed'|'cleanup-pending'|'transport-closed'|'parsing'|'validation-failed'|'page-saved'|'saved';
+export interface ModelEvent {type:ModelEventType;code?:string;httpStatus?:number;willRetry?:boolean;page?:number}
+export interface TraceEvent extends ModelEvent {atMs:number;count:number}
+export interface ModelTrace {id:string;bookId:string;kind:'lesson'|'index'|'overview'|'question'|'review'|'probe';pages:number[];model:string;createdAt:string;phase:ModelPhase;lastPhase?:ModelActivity|'queued';elapsedMs:number;phaseMs:number;marks:Partial<Record<ModelPhase,number>>;failure?:'timeout'|'network'|'quota'|'auth'|'other';events?:TraceEvent[]}
+export type ProbeMode='text'|'page'|'direct';
+export interface ProbeResult {mode?:ProbeMode;status:'idle'|'running'|'done'|'error'|'cancelled';traceId?:string;model?:string;page?:number;matched?:boolean;error?:string}
+export interface ProbeState extends ProbeResult {canDirect?:boolean;history?:ProbeResult[];records?:ModelTrace[]}
+export interface TransportSnapshot {lines:number;invalidLines:number;unmatchedReplies:number;pendingRPCs:number;processRunning:boolean;lastInputAt?:string;events:Record<string,number>}
+export interface GenerationDiagnostics {records:ModelTrace[];transport?:TransportSnapshot;preparation?:{count:number;textReady:boolean;images:number;indexed:number;lessons:number;mapComplete:boolean;paused:boolean;started:boolean};limit:number}
 export interface StudySettings { paused:boolean; model:string; aiConcurrency:number; pdfWorkers:number; lessonDetail:LessonDetail; uiScale:number; readingFontSize:number }
 export interface OutlineEntry { title:string; page:number; children:OutlineEntry[] }
 export interface RuntimeStatus { activeLessons:number; indexing:boolean; modelActive:number; modelQueued:number; pdfWorkers:number }
@@ -41,6 +48,9 @@ export interface StudyAPI {
   state(id?: string): Promise<AppState>;
   diagnostics(id?:string):Promise<GenerationDiagnostics>;
   exportDiagnostics(id?:string):Promise<string>;
+  probeState():Promise<ProbeState>;
+  startProbe(mode:ProbeMode,id?:string,page?:number):Promise<void>;
+  cancelProbe():Promise<void>;
   importPDF(): Promise<string | null>;
   navigate(id: string, page: number): Promise<void>;
   login(): Promise<void>;

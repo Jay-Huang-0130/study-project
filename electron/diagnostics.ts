@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {performance} from 'node:perf_hooks';
-import type {ModelTrace,ModelPhase,ModelActivity} from '../src/shared';
+import type {ModelTrace,ModelPhase,ModelActivity,ModelEvent} from '../src/shared';
 type Metadata=Pick<ModelTrace,'bookId'|'kind'|'pages'|'model'>;
 const ranks:Record<ModelPhase,number>={queued:0,connecting:1,thread:2,starting:3,waiting:4,receiving:5,done:6,error:6,cancelled:6};
 const terminal=(phase:ModelPhase)=>ranks[phase]===6;
@@ -16,13 +16,25 @@ export class ModelDiagnostics{
   const entry=this.entries.get(id);if(!entry||terminal(entry.record.phase)||ranks[phase]<ranks[entry.record.phase])return;
   entry.record.marks[phase]??=Math.max(0,this.now()-entry.start);entry.record.phase=phase;
  }
+ event(id:string,event:ModelEvent){
+  const entry=this.entries.get(id);if(!entry)return;
+  const events=entry.record.events??=[];
+  const atMs=Math.max(0,this.now()-entry.start),last=events.at(-1);
+  if(last?.type===event.type&&['reasoning','content','item-started'].includes(event.type)){last.count++;last.atMs=atMs;return;}
+  events.push({...event,atMs,count:1});if(events.length>60)events.splice(0,events.length-60);
+ }
+ note(bookId:string,event:ModelEvent,kind:ModelTrace['kind']){
+  const found=[...this.entries].reverse().find(([,e])=>e.record.bookId===bookId&&e.record.kind===kind);
+  if(found)this.event(found[0],event);
+ }
  finish(id:string,error?:unknown){
   const entry=this.entries.get(id);if(!entry||terminal(entry.record.phase))return;
   const e=error as {name?:string;message?:string}|undefined,phase:ModelPhase=!error?'done':e?.name==='AbortError'?'cancelled':'error';
   entry.end=this.now();entry.record.lastPhase=entry.record.phase as ModelActivity|'queued';entry.record.phase=phase;entry.record.marks[phase]=Math.max(0,entry.end-entry.start);
   if(phase==='error'){
-   const message=typeof e?.message==='string'?e.message:'';
-   entry.record.failure=/quota|usage.?limit|rate.?limit|用量|額度/i.test(message)?'quota':/401|403|unauthor|sign.?in|auth|登入/i.test(message)?'auth':/timeout|timed.?out|逾時|超過.*分鐘/i.test(message)?'timeout':/ECONN|ENOTFOUND|network|連線|斷線/i.test(message)?'network':'other';
+   const diagnostic=(error as any)?.diagnostic;
+   const message=[typeof e?.message==='string'?e.message:'',diagnostic?.code,diagnostic?.httpStatus].join(' ');
+   entry.record.failure=/quota|usage.?limit|rate.?limit|429|用量|額度/i.test(message)?'quota':/401|403|unauthor|sign.?in|auth|登入/i.test(message)?'auth':/timeout|timed.?out|逾時|超過.*分鐘/i.test(message)?'timeout':/ECONN|ENOTFOUND|network|httpConnection|responseStream|連線|斷線/i.test(message)?'network':'other';
   }
  }
  snapshot(bookId?:string):ModelTrace[]{

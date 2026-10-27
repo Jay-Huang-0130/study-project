@@ -10,6 +10,7 @@ import { Store } from './store';
 import { CodexClient } from './codex';
 import { Engine } from './engine';
 import {Reviews} from './review';
+import {ConnectionChecks} from './connection-checks';
 import type { AppState, AuthState, Page, StudySettings } from '../src/shared';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'study', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
@@ -21,6 +22,7 @@ let store: Store;
 let client: CodexClient;
 let engine: Engine;
 let reviews:Reviews;
+let connectionChecks:ConnectionChecks;
 let updates:Updates;
 let auth: AuthState = { connected: false, label: '尚未登入', models: [] };
 const workers = new Map<string, PDFLoader>();
@@ -97,9 +99,12 @@ function registerIPC() {
   handle('study:createGroup',(name:string)=>{const id=store.createGroup(name);changed();return id;});
   const diagnosticSnapshot=(id?:string)=>{
     const book=id?store.book(id):undefined;
-    return {limit:engine.diagnostics.limit,records:engine.diagnostics.snapshot(id),preparation:book?{count:book.count,textReady:book.textReady??book.extraction==='done',images:book.pages.filter(p=>p.imageReady).length,indexed:book.map?.pages.length??book.mapChunks.flat().length,lessons:book.pages.filter(p=>p.status==='done').length,mapComplete:book.mapStatus==='done'&&book.map?.complete!==false,paused:!!book.generationPaused,started:!!book.generationStarted}:undefined};
+    return {limit:engine.diagnostics.limit,records:engine.diagnostics.snapshot(id),transport:client.transport,connectionTests:connectionChecks.snapshot(),preparation:book?{count:book.count,textReady:book.textReady??book.extraction==='done',images:book.pages.filter(p=>p.imageReady).length,indexed:book.map?.pages.length??book.mapChunks.flat().length,lessons:book.pages.filter(p=>p.status==='done').length,mapComplete:book.mapStatus==='done'&&book.map?.complete!==false,paused:!!book.generationPaused,started:!!book.generationStarted}:undefined};
   };
   handle('study:diagnostics',diagnosticSnapshot);
+  handle('study:probeState',()=>connectionChecks.snapshot());
+  handle('study:startProbe',(mode:any,id?:string,page?:number)=>connectionChecks.start(mode,id,page));
+  handle('study:cancelProbe',()=>connectionChecks.cancel());
   handle('study:exportDiagnostics',(id?:string)=>{const file=path.join(store.root,`generation-diagnostics-${Date.now()}.json`);atomicJSON(file,{formatVersion:1,appVersion:app.getVersion(),exportedAt:new Date().toISOString(),...diagnosticSnapshot(id)});return file;});
   handle('study:renameGroup',(id:string,name:string)=>{store.renameGroup(id,name);changed();});
   handle('study:deleteGroup',(id:string)=>{store.deleteGroup(id);changed();});
@@ -211,6 +216,7 @@ app.whenReady().then(async () => {
     streamTimer=setTimeout(()=>{streamTimer=undefined;if(win&&!win.isDestroyed())for(const value of streams.values())win.webContents.send('study:delta',value);streams.clear();},100);
   },book=>{reviews?.cancel(book.id);void pausePDF(book.id);});
   reviews=new Reviews(store,(...args)=>engine.generateReview(...args),changed);
+  connectionChecks=new ConnectionChecks(engine,client,store,changed);
   client.on('notification', (method: string, params: any) => {
     if (method === 'account/updated' || method === 'account/login/completed') {
       if (method === 'account/login/completed' && !params.success) { auth.error = '登入未完成，請重新登入。'; changed(); }
@@ -249,6 +255,7 @@ let shuttingDown = false;
 let stopping:Promise<void>|undefined;
 function stopResources():Promise<void>{
   if(stopping)return stopping;
+  connectionChecks?.cancel();
   reviews?.cancelAll('程式已關閉，等待手動繼續');engine?.stop();
   for(const [id,timer] of saveTimers){clearTimeout(timer);store.save(store.book(id));}saveTimers.clear();
   for(const id of workers.keys()){const b=store.book(id);b.extraction='pending';store.save(b);}

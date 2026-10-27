@@ -89,3 +89,15 @@ test('model timing callbacks distinguish acceptance from first output and do not
 test('an observer failure cannot fail a model request or cause a retry',async()=>{
  const f=transport(),task=f.client.generate('p',[],'m','i',undefined,undefined,undefined,()=>{throw Error('observer');});await flush();f.complete('thread-1');assert.equal(await task,'講稿');assert.equal(f.calls.filter(c=>c.method==='turn/start').length,1);
 });
+
+test('reasoning activity proves an active turn without a turn/start RPC reply; errors expose safe retry evidence',async()=>{
+ const f=transport(),phases:string[]=[],events:any[]=[],task=f.client.generate('p',[],'m','i',undefined,undefined,undefined,p=>phases.push(p),e=>events.push(e));await flush();
+ f.notice('item/started','thread-1',{turnId:'turn',item:{type:'reasoning'}});assert.equal(phases.at(-1),'waiting');
+ f.notice('error','thread-1',{turnId:'turn',willRetry:true,error:{message:'secret token',codexErrorInfo:{httpConnectionFailed:{httpStatusCode:429}},additionalDetails:'secret'}});
+ assert.ok(events.some(e=>e.type==='upstream-error'&&e.httpStatus===429&&e.willRetry));assert.ok(!JSON.stringify(events).includes('secret'));
+ f.complete('thread-1');assert.equal(await task,'講稿');assert.ok(events.some(e=>e.type==='reasoning'));
+});
+test('fatal error completes promptly without waiting eight minutes; commentary cannot corrupt lesson JSON',async()=>{
+ const f=transport(),task=f.client.generate('p',[],'m','i');await flush();f.notice('error','thread-1',{turnId:'t',willRetry:false,error:{message:'denied',codexErrorInfo:'usageLimitExceeded'}});await assert.rejects(task,/denied/);assert.equal(f.pending(),0);
+ const g=transport(),answer=g.client.generate('p',[],'m','i');await flush();g.notice('item/started','thread-1',{turnId:'t',item:{id:'comment',type:'agentMessage',phase:'commentary'}});g.notice('item/agentMessage/delta','thread-1',{itemId:'comment',delta:'I will explain this.'});g.complete('thread-1','{"page":1,"lesson":"ok"}');assert.equal(await answer,'{"page":1,"lesson":"ok"}');
+});

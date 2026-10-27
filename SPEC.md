@@ -1,6 +1,6 @@
 # Study Project 產品規格
 
-版本基準：**0.10.1**；日期：**2026-10-27**。本文統一目前已確認的產品行為；歷史需求與取捨見 [DEVLOG](DEVLOG.md)，實作與驗證分別見 [架構](docs/ARCHITECTURE.md)、[測試紀錄](docs/TESTING.md)。
+版本基準：**0.10.2**；日期：**2026-10-27**。本文統一目前已確認的產品行為；歷史需求與取捨見 [DEVLOG](DEVLOG.md)，實作與驗證分別見 [架構](docs/ARCHITECTURE.md)、[測試紀錄](docs/TESTING.md)。
 
 ## 1. 目標與平台
 

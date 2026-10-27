@@ -1,6 +1,6 @@
 # 開發與維護流程
 
-基準：**0.10.1**；更新日期：**2026-10-27**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
+基準：**0.10.2**；更新日期：**2026-10-27**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
 
 ## 1. 開始工作
 
@@ -42,7 +42,7 @@ npm run dev
 | PDF / 介面 | `npm run check`、隔離 Electron 操作 | 多教材快速切換、縮放、重載、公式與畫布生命週期 |
 | 發行 / 更新 | 編譯、打包、真正 installer 更新測試 | 一般退出不安裝、明確安裝、保存路徑、重開與公開 feed |
 
-`npm run check:codex` 只驗證獨立元件初始化及模型目錄，不代表登入資格、額度或教學品質。94 項為 0.10.1 現有測試紀錄；目前證據見 [TESTING](docs/TESTING.md)。
+`npm run check:codex` 只驗證獨立元件初始化及模型目錄，不代表登入資格、額度或教學品質。102 項為 0.10.2 現有測試紀錄；目前證據見 [TESTING](docs/TESTING.md)。
 
 ## 5. 打包與發行
 
