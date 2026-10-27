@@ -1,6 +1,6 @@
 # 開發與維護流程
 
-基準：**0.10.3**；更新日期：**2026-10-27**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
+基準：**0.11.0**；更新日期：**2026-10-27**。產品行為以 [SPEC](SPEC.md) 為準，實作方法見 [ARCHITECTURE](docs/ARCHITECTURE.md) 與 [ENGINE](docs/ENGINE.md)，歷史進度見 [DEVLOG](DEVLOG.md)。
 
 ## 1. 開始工作
 
@@ -78,3 +78,5 @@ npm run package
 每次結束在 DEVLOG 交代做了什麼、如何驗證、限制與下一步。用 `git status --short --branch`、`git log -1 --oneline` 及遠端提交識別確認交付狀態。
 
 0.9.0：科目群組實作見 Store.library、LibraryHome 與 GROUPS 文件；浮動詳情見 FloatingInfo、panel-layout、ConceptReview。請避免群組操作呼叫 Engine.wake，或將分組／卡片大小加入來源指紋。
+
+生成阻塞維護：修改 Codex 傳送或排程前，先讀 [INCIDENTS](docs/INCIDENTS.md)，保留寫入確認、背壓、取消與遲到結果測試；「準備送出」不能當成寫入或遠端接受證據。

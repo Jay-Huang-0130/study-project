@@ -1,10 +1,10 @@
 # Study Project Engine：漸進教材理解與單請求多頁串流生成
 
-> 技術論文式設計說明。對應 **0.10.3**，更新於 **2026-10-27**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
+> 技術論文式設計說明。對應 **0.11.0**，更新於 **2026-10-27**。本文描述現有系統與驗證結果，不是已發表的學術論文，也不宣稱教學準確率已經過統計實驗證明。
 
 ## 摘要
 
-PDF 自學工具同時面臨首段講解延遲、跨頁上下文不足，以及非同步結果錯頁的問題。Study Project 將處理流程拆為本機文字與圖像解析、分段逐頁索引、全書脈絡整合及多頁講稿串流生成，透過具有容量限制的優先佇列與教材輪替排程，在不等待整份教材完成視覺分析的前提下，產出可立即閱讀的講稿。
+PDF 自學工具同時面臨首段講解延遲、跨頁上下文不足，以及非同步結果錯頁的問題。Study Project 將處理流程拆為本機文字與圖像解析、分段逐頁索引、全書脈絡整合及多頁講稿串流生成，透過具有容量限制的優先佇列與教材完成後接續的 FIFO 排程，在不等待整份教材完成視覺分析的前提下，產出可立即閱讀的講稿。
 
 本系統以來源頁面與顯式上下文建構每個獨立模型請求，保存生成時的索引版本及覆蓋範圍；以教材物件身分、頁碼與 generationId 防止過期結果回寫。本文說明實作演算法、取消恢復語義、效能模型與控制流程測試。現有證據支持排程與保存行為，尚不足以量化模型教學品質或證明高並行數不影響上游服務表現。
 
@@ -109,23 +109,27 @@ score(i) = i
 
 ## 4. 方法：全域單請求與多頁批次
 
-所有 Provider 請求共用容量為 1 的 PriorityPool。0.10.1 新增全域 5000ms 間隔：前次 Provider 呼叫結束（含失敗與取消）後，下一次至少等到該期限才啟動；不是從送出時計算，也不在批內每頁額外等待。首次請求立即執行，閒置已超過 5 秒則無額外延遲。使用單調時計計算剩餘時間，等待期間不占 active 名額，計入 queued／容量等待；新問題可優先排隊但不能跳過間隔。暫停會移除等待任務並清除無工作的計時器，重新入隊仍依前次完成時間計算，避免重複加算 5 秒。背景 wake 亦最多登記一個工作；手動問題與概念圖可排隊，但不會取得第二個 Provider 名額。舊 aiConcurrency 設定統一遷移為 1，介面移除 AI 並行選項。本機 PDF Worker 與 AI 容量分開。
+所有 Provider 請求共用容量為 1 的 PriorityPool。0.11.0 移除 0.10.1 加入的固定 5000ms 間隔，前項結束後，就緒工作可直接取得名額；背景 job 清理後約 30ms 喚醒。並不等於遠端必定即時回覆。舊 aiConcurrency 設定仍統一遷移為 1，本次沒有恢復多請求並行，也沒有修改模型或講稿提示。
 
-排隊優先順序為問答 0、講稿 1、索引／整合／概念圖 2，同級 FIFO。已開始的請求不被新問題搶占，因此多頁批次期間提問需等目前批次結束；本版沒有為互動另開並行名額。
+`generationQueue` 以教材物件身分保存本次會話的啟動順序；`prepareBook()` 在等待登入或舊 PDFLoader 停止前預留順位，`resumeBook()` 解除準備鎖。主程序以 intent token 防止等待期間的暫停或刪除被遲到的續作覆蓋。開 App 時 Store 重設 generationStarted，因此不從舊旗標自動產生。
 
-背景教材以 cursor 輪替，單份教材先選可處理的 pending 問題，再選講稿或索引。每次索引完成設定 preferLesson，接著先生成就緒頁面的講稿；否則繼續索引或整合全書。完整索引是完整總覽的前置條件，不是早期講稿的前置條件。
+`currentBook` 鎖定本份教材，包含等待圖片、索引、完整總覽及在途 job 清理的時間。完成定義是完整地圖、全部講稿及問答完成；選到最後頁、串流保存最後一頁都不直接換書。正在處理的教材不可拖走；等待項目可拖拉或按上下移。IPC 驗證完整 ID 集合、重複／過期清單及鎖定隊首，拒絕時由 UI 重新取得狀態。
+
+暫停或生成／解析出錯，取消受影響工作、保留完成快取、移出佇列，接著處理下一份；再次手動啟動排到隊尾，重複續作不重複入隊。同一教材內先處理 pending 問答，再交替安排索引與講稿。其他教材的提問先保存 pending，加入隊尾，不超越當前教材。手動概念圖維持獨立流程，仍共享 Pool；不屬於 PDF 自動完成條件。
 
 ~~~text
 WAKE:
-  if stopped or unauthenticated: return
-  if jobs.size >= 1: return
-  round-robin books explicitly started, skipping paused books:
-    if pending eligible question: enqueue question
-    else if ready lessons and (preferLesson or no index work):
-      enqueue one multi-page lesson batch; clear preferLesson
-    else if missing index pages: enqueue first up to 5 / later up to 10 pages
-    else if all indexed but map unfinished: enqueue overview
-    stop after registering one job
+  prune deleted / paused / fully completed books (retain any live job)
+  append explicitly enrolled in-session books only
+  if stopped / probe / unauthenticated / live job: return
+  pin current book, or choose queue head
+  if failed: pause and remove it; continue with next book
+  if awaiting authentication / old loader shutdown: wait
+  if pending eligible question: enqueue question
+  else if ready lessons and (preferLesson or no index work): enqueue lesson batch
+  else if missing index pages: enqueue first up to 5 / later up to 10 pages
+  else if all indexed but map unfinished: enqueue overview
+  if prerequisites missing: wait here; do not rotate to another book
 ~~~
 
 講稿批次依升序選最前方 pending 頁，跳過 done 快取；遇到 running、缺圖或缺索引即停止，不跨過缺少前置資料的頁面。最多 5 頁，另依講解偏好與密度累加預估篇幅，軟預算 3000 字；例如詳細 dense 預估每頁 1200 字，最多 2 頁。這是分組啟發式，不是 token 上限或模型實際長度保證。
@@ -246,7 +250,7 @@ stateDiagram-v2
 
 | 證據 | 已支持的結論 | 不能推出的結論 |
 | --- | --- | --- |
-| 0.10.3 的 111 項自動測試，含可控制 Provider | 單請求、多頁串流、取消續跑、錯頁隔離、快取與更新符合測試條件 | 真實模型準確率、真實網路首段延遲 |
+| 0.11.0 的 119 項自動測試，含可控制 Provider | 教材 FIFO／重排、單請求多頁串流、取消續跑、錯頁隔離、管道及快取符合測試條件 | 真實模型準確率、真實網路首段延遲 |
 | 多頁分段輸出與問題優先測試 | 結果依原頁保存；等待問題可先於背景佇列 | 已在途請求被搶占、所有工作都有等待上限 |
 | PDF Worker 單次歷史量測：191 頁、1 緒 14.67s、2 緒 8.04s | 該機、該教材的本機圖像渲染約快 1.82 倍 | AI 推論也快 1.82 倍、所有電腦都有相同改善 |
 | 0.7.1 預覽對照與重載測試 | renderer PDF 生命週期與錯誤恢復修補有效 | Engine 教學品質因此提高 |

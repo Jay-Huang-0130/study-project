@@ -58,14 +58,39 @@ export class Engine {
   private jobs=new Map<string,{book:Book;kind:'lesson'|'index'|'question';controller:AbortController;page?:number;message?:Message}>();
   private preferLesson=new Set<Book>();
   private stopping=false;
-  private cursor=0;
+  private generationQueue:Book[]=[];
+  private currentBook?:Book;
+  private preparingBooks=new Set<Book>();
   private pool:PriorityPool;
   private probeBusy=false;
-  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{},requestGapMs=5000){this.pool=new PriorityPool(1,changed,requestGapMs);}
+  constructor(public store: Store,private provider: Provider,private changed:()=>void,private delta:(event:{bookId:string;page:number;messageId?:string;generationId?:string;text:string})=>void,private onPause:(book:Book)=>void=()=>{},requestGapMs=0){this.pool=new PriorityPool(1,changed,requestGapMs);}
   get progress(){return {activeLessons:[...this.jobs.values()].filter(j=>j.kind==='lesson').length,indexing:[...this.jobs.values()].some(j=>j.kind==='index'),modelActive:this.pool.snapshot.active,modelQueued:this.pool.snapshot.queued};}
-  bookState(book:Book):'running'|'paused'|'complete'|'waiting'{
+  private syncQueue(){
+    const live=(book:Book)=>this.store.books.get(book.id)===book&&book.generationStarted&&!book.generationPaused&&(!bookComplete(book)||[...this.jobs.values()].some(j=>j.book===book));
+    this.generationQueue=this.generationQueue.filter(live);
+    // generationStarted is session-only and is reset by Store on restart.
+    // Explicit resume appends immediately; this also recovers already-enrolled in-session work.
+    for(const book of this.store.books.values())if(live(book)&&!this.generationQueue.includes(book))this.generationQueue.push(book);
+    if(this.currentBook&&!this.generationQueue.includes(this.currentBook))this.currentBook=undefined;
+  }
+  get queue(){
+    this.syncQueue();return this.generationQueue.map((book,i)=>({id:book.id,position:i+1,current:book===this.currentBook}));
+  }
+  prepareBook(id:string){
+    const book=this.store.book(id);book.generationStarted=true;book.generationPaused=false;book.pauseReason=undefined;this.preparingBooks.add(book);
+    if(!this.generationQueue.includes(book))this.generationQueue.push(book);this.changed();
+  }
+  reorderQueue(ids:string[]){
+    this.syncQueue();
+    if(!Array.isArray(ids)||ids.length!==this.generationQueue.length||new Set(ids).size!==ids.length||ids.some(id=>!this.generationQueue.some(b=>b.id===id)))throw new Error('佇列已變更，請依最新清單重新調整。');
+    if(this.currentBook&&ids[0]!==this.currentBook.id)throw new Error('正在處理的教材會先完成；請調整後面的等待順序。');
+    const byId=new Map(this.generationQueue.map(b=>[b.id,b]));this.generationQueue=ids.map(id=>byId.get(id)!);this.changed();this.wake();
+  }
+  bookState(book:Book):'running'|'queued'|'paused'|'complete'|'waiting'{
     if(book.generationPaused)return 'paused';
-    if(bookComplete(book))return 'complete';
+    if(bookComplete(book)&&![...this.jobs.values()].some(j=>j.book===book))return 'complete';
+    const entry=this.queue.find(b=>b.id===book.id);
+    if(entry&&!entry.current)return 'queued';
     return this.authenticated&&book.generationStarted?'running':'waiting';
   }
   activityFor(book:Book){
@@ -73,25 +98,26 @@ export class Engine {
     if(this.bookState(book)==='complete')return '本教材講解已準備完成';
     if(!book.generationStarted)return '等待手動開始／繼續生成';
     if(!this.authenticated)return '等待 ChatGPT 連線';
+    const entry=this.queue.find(b=>b.id===book.id);
+    if(entry&&!entry.current)return `教材排隊中 · 第 ${entry.position} 順位`;
     return '本教材生成中';
   }
   wake(){
     if(this.stopping||this.probeBusy)return;
     if(this.activeId){const b=this.store.book(this.activeId);if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}}
-    const books=[...this.store.books.values()].filter(b=>b.generationStarted);
-    for(const b of books)if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}
-    if(this.activeId&&this.store.books.has(this.activeId))this.activity=this.activityFor(this.store.book(this.activeId));
+    this.syncQueue();
+    for(const b of this.generationQueue)if(!b.map&&b.mapChunks.length){this.partialMap(b);this.persist(b);}
     if(!this.authenticated)return;
-    while(this.jobs.size<1){
-      let started=false;
-      for(let i=0;i<books.length;i++){
-        const at=(this.cursor+i)%books.length,book=books[at];
-        if(book.generationPaused)continue;
-        if(book.mapStatus==='error'||book.pages.some(p=>p.status==='error')){this.pauseBook(book.id,'有未完成工作，請按繼續生成重試');continue;}
-        if(this.schedule(book)){this.cursor=(at+1)%books.length;started=true;break;}
-      }
-      if(!started)break;
+    // A committed final page is not the end of its in-flight request. Drain the job first.
+    if(this.jobs.size)return;
+    while(this.generationQueue.length){
+      const book=this.currentBook??this.generationQueue[0];this.currentBook=book;
+      if(book.mapStatus==='error'||book.pages.some(p=>p.status==='error')){this.pauseBook(book.id,'有未完成工作，請按繼續生成重試');continue;}
+      if(!this.preparingBooks.has(book))this.schedule(book);
+      // Missing local images/index prerequisites must not let another book overtake it.
+      break;
     }
+    if(this.activeId&&this.store.books.has(this.activeId))this.activity=this.activityFor(this.store.book(this.activeId));
   }
   private schedule(book:Book){
     const hasQuestion=[...this.jobs.values()].some(j=>j.book===book&&j.kind==='question');
@@ -131,14 +157,15 @@ export class Engine {
     });
   }
   pauseBook(id:string,reason='已手動暫停'){
-    const book=this.store.book(id);book.generationPaused=true;book.pauseReason=reason;
+    const book=this.store.book(id);book.generationPaused=true;book.generationStarted=false;book.pauseReason=reason;
+    this.preparingBooks.delete(book);this.generationQueue=this.generationQueue.filter(b=>b!==book);if(this.currentBook===book)this.currentBook=undefined;
     this.cancelBook(book);
     for(const page of book.pages){if(page.status==='running'){page.status='pending';page.generationId=undefined;}for(const m of page.messages)if(m.status==='running')m.status='pending';}
     if(book.mapStatus==='running')book.mapStatus='pending';
-    this.persist(book);this.onPause(book);
+    this.persist(book);this.onPause(book);if(!this.stopping)setTimeout(()=>this.wake(),30);
   }
   resumeBook(id:string){
-    const book=this.store.book(id);book.generationPaused=false;book.pauseReason=undefined;book.generationStarted=true;book.mapError=undefined;book.extractionError=undefined;
+    const book=this.store.book(id);this.preparingBooks.delete(book);book.generationPaused=false;book.pauseReason=undefined;book.generationStarted=true;book.mapError=undefined;book.extractionError=undefined;
     if(book.mapStatus==='error'){book.mapStatus='pending';book.mapError=undefined;}
     if(book.mapStatus==='done'&&(!book.map||book.map.complete===false||book.map.pages.length<book.count))book.mapStatus='pending';
     if(book.extraction==='error'){book.extraction='pending';book.extractionError=undefined;}
@@ -147,6 +174,7 @@ export class Engine {
       if(page.status==='error'){page.status='pending';page.error=undefined;}
       for(const message of page.messages)if(message.status==='error'){message.status='pending';message.error=undefined;}
     }
+    if(!this.generationQueue.includes(book))this.generationQueue.push(book);
     this.persist(book);this.wake();
   }
   connectionLost(message:string){
@@ -270,8 +298,10 @@ export class Engine {
     if(!question.trim()||question.length>12000)throw new Error('請輸入 1～12000 字的問題。');
     const sourcePages=scope?Array.from({length:scope.end-scope.start+1},(_,i)=>scope.start+i):page.messages.filter(m=>m.kind==='exercise'&&m.status==='done').at(-1)?.sourcePages;
     if(sourcePages?.some(p=>!book.pages[p-1]?.imageReady))throw new Error('選取範圍的原頁尚未解析完成，請先縮小範圍。');
-    const m:Message={id:randomUUID(),question:question.trim(),answer:'',status:'running',createdAt:new Date().toISOString(),kind,sourcePages};
+    const queue=this.queue,queued=queue.length>0&&queue[0].id!==book.id;
+    const m:Message={id:randomUUID(),question:question.trim(),answer:'',status:queued?'pending':'running',createdAt:new Date().toISOString(),kind,sourcePages};
     page.messages.push(m);this.persist(book);
+    if(queued){this.resumeBook(book.id);return;}
     await this.launch(book,`question:${m.id}`,'question',signal=>this.answer(book,n,m,signal),n,m);
   }
   private async answer(book:Book,n:number,m:Message,signal:AbortSignal){

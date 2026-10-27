@@ -1,5 +1,5 @@
 export type Status = 'pending' | 'running' | 'done' | 'error';
-export type GenerationState = 'running' | 'paused' | 'complete' | 'waiting';
+export type GenerationState = 'running' | 'queued' | 'paused' | 'complete' | 'waiting';
 export type LessonDetail = 'concise' | 'standard' | 'detailed';
 export type ModelPhase='queued'|'connecting'|'thread'|'starting'|'waiting'|'receiving'|'done'|'error'|'cancelled';
 export type ModelActivity=Exclude<ModelPhase,'queued'|'done'|'error'|'cancelled'>;
@@ -39,7 +39,8 @@ export interface BookSummary {groupId?:string; id: string; name: string; count: 
 export interface ModelOption { id: string; name: string; isDefault: boolean }
 export interface AuthState { connected: boolean; label: string; error?: string; models: ModelOption[] }
 export interface UpdateState { status:'unsupported'|'idle'|'checking'|'current'|'available'|'downloading'|'ready'|'installing'|'error'; version?:string; percent?:number; error?:string }
-export interface AppState extends StudySettings { books: BookSummary[]; groups:LibraryGroup[]; active?: Book; auth: AuthState; activity: string; version:string; runtime:RuntimeStatus; update:UpdateState }
+export interface QueueEntry {id:string;position:number;current:boolean}
+export interface AppState extends StudySettings { generationQueue?:QueueEntry[]; books: BookSummary[]; groups:LibraryGroup[]; active?: Book; auth: AuthState; activity: string; version:string; runtime:RuntimeStatus; update:UpdateState }
 export interface StudyAPI {
   createGroup(name:string):Promise<string>;
   renameGroup(id:string,name:string):Promise<void>;
@@ -62,6 +63,7 @@ export interface StudyAPI {
   deleteMessage(id:string,page:number,messageId:string):Promise<void>;
   deleteBook(id:string):Promise<void>;
   generation(id:string,paused:boolean):Promise<void>;
+  reorderQueue(ids:string[]):Promise<void>;
   exercise(id: string, start: number, end: number, count: number): Promise<void>;
   fullscreen(): Promise<void>;
   dataFolder(): Promise<void>;

@@ -37,3 +37,5 @@
 | 程序與 IPC | [main.ts](../electron/main.ts)、[preload.ts](../electron/preload.ts)、[shared.ts](../src/shared.ts) |
 | PDF 預覽與目錄 | [PDFViewer.tsx](../src/PDFViewer.tsx)、[reading-outline.ts](../src/reading-outline.ts) |
 | 更新與發行 | [updates.ts](../electron/updates.ts)、[release.yml](../.github/workflows/release.yml) |
+
+- [生成阻塞維護紀錄](INCIDENTS.md)：已確認缺口、修補、診斷判讀與防止回退要求。

@@ -20,6 +20,7 @@ const api: StudyAPI = {
   retry: (id,n) => ipcRenderer.invoke('study:retry',id,n),
   ask: (id,n,q,kind) => ipcRenderer.invoke('study:ask',id,n,q,kind),
   deleteMessage:(id,n,messageId)=>ipcRenderer.invoke('study:deleteMessage',id,n,messageId),
+  reorderQueue:ids=>ipcRenderer.invoke('study:reorderQueue',ids),
   generation:(id,paused)=>ipcRenderer.invoke('study:generation',id,paused),
   deleteBook:id=>ipcRenderer.invoke('study:deleteBook',id),
   exercise: (id,start,end,count) => ipcRenderer.invoke('study:exercise',id,start,end,count),

@@ -89,13 +89,27 @@ function pageNumber(id: string, value: unknown) {
   if (!Number.isInteger(n) || n < 1 || n > b.count) throw new Error('頁碼不在教材範圍內');
   return n;
 }
+// Reserve the click order before awaiting authentication or an old PDF loader shutdown.
+const generationIntents=new Map<string,symbol>();
+async function startGeneration(id:string){
+  const intent=Symbol();generationIntents.set(id,intent);engine.prepareBook(id);
+  try{
+    if(!engine.authenticated)await readAuth();
+    if(generationIntents.get(id)!==intent)return;
+    if(!engine.authenticated)throw new Error(auth.error||'請先連接 ChatGPT，再繼續生成。');
+    await stoppingPDF.get(id);
+    if(generationIntents.get(id)!==intent)return;
+    engine.resumeBook(id);extract(id);
+  }catch(error){if(generationIntents.get(id)===intent)engine.pauseBook(id,error instanceof Error?error.message:String(error));throw error;}
+  finally{if(generationIntents.get(id)===intent)generationIntents.delete(id);}
+}
 function registerIPC() {
   // Every handler is available only to the application's own main frame.
   const handle = (name: string, fn: (...args: any[]) => any) => ipcMain.handle(name, (event, ...args) => {
     if (event.sender !== win?.webContents || event.senderFrame !== win?.webContents.mainFrame) throw new Error('不允許此來源');
     return fn(...args);
   });
-  handle('study:state', (id?: string): AppState => ({ groups:store.library.groups, books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? reviews.snapshot(store.book(id)) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
+  handle('study:state', (id?: string): AppState => ({ generationQueue:engine.queue, groups:store.library.groups, books: store.summaries().map(b=>({...b,generationState:engine.bookState(store.book(b.id))})), active: id ? reviews.snapshot(store.book(id)) : undefined, auth, ...store.settings, update:updates.state, activity:id?engine.activityFor(store.book(id)):engine.activity, version:app.getVersion(),runtime:{...engine.progress,pdfWorkers:id ? workers.get(id)?.workerCount ?? 0 : 0} }));
   handle('study:createGroup',(name:string)=>{const id=store.createGroup(name);changed();return id;});
   const diagnosticSnapshot=(id?:string)=>{
     const book=id?store.book(id):undefined;
@@ -144,14 +158,11 @@ function registerIPC() {
     }
     store.updateSettings(clean);for(const loader of workers.values())loader.setParallelism(store.settings.pdfWorkers);changed();engine.wake();
   });
+  handle('study:reorderQueue',(ids:string[])=>engine.reorderQueue(ids));
   handle('study:generation',async(id:string,paused:boolean)=>{
     store.book(id);if(typeof paused!=='boolean')throw new Error('生成狀態無效');
-    if(paused){engine.pauseBook(id);await pausePDF(id);}
-    else{
-      if(!engine.authenticated)await readAuth();
-      if(!engine.authenticated)throw new Error(auth.error||'請先連接 ChatGPT，再繼續生成。');
-      await stoppingPDF.get(id);engine.resumeBook(id);extract(id);
-    }
+    if(paused){generationIntents.delete(id);engine.pauseBook(id);await pausePDF(id);}
+    else await startGeneration(id);
     changed();
   });
   handle('study:retry', async(id: string, value?: number) => {
@@ -163,9 +174,7 @@ function registerIPC() {
       for (const p of b.pages) if (p.status === 'error') { p.status = 'pending'; p.error = undefined; }
     }
     store.save(b); engine.activeId = id;
-    if(!engine.authenticated)await readAuth();
-    if(!engine.authenticated)throw new Error(auth.error||'請先連接 ChatGPT。');
-    await stoppingPDF.get(id);engine.resumeBook(id);extract(id);changed();
+    await startGeneration(id);changed();
   });
   handle('study:ask', async (id: string, value: number, question: string, kind: 'question' | 'exercise') => {
     if (typeof question !== 'string' || (kind !== undefined && !['question','exercise'].includes(kind))) throw new Error('問題格式無效');
@@ -177,7 +186,7 @@ function registerIPC() {
   });
   handle('study:deleteBook',async(id:string)=>{
     store.book(id);
-    engine.pauseBook(id,'正在刪除教材');if(engine.activeId===id)engine.activeId=undefined;
+    generationIntents.delete(id);engine.pauseBook(id,'正在刪除教材');if(engine.activeId===id)engine.activeId=undefined;
     const timer=saveTimers.get(id);if(timer){clearTimeout(timer);saveTimers.delete(id);}
     await pausePDF(id);await stoppingPDF.get(id);
     store.deleteBook(id);changed();engine.wake();
@@ -214,7 +223,7 @@ app.whenReady().then(async () => {
     streams.set(`${event.bookId}:${event.page}:${event.messageId??'lesson'}`,event);
     if(streamTimer)return;
     streamTimer=setTimeout(()=>{streamTimer=undefined;if(win&&!win.isDestroyed())for(const value of streams.values())win.webContents.send('study:delta',value);streams.clear();},100);
-  },book=>{reviews?.cancel(book.id);void pausePDF(book.id);});
+  },book=>{generationIntents.delete(book.id);reviews?.cancel(book.id);void pausePDF(book.id);});
   reviews=new Reviews(store,(...args)=>engine.generateReview(...args),changed);
   connectionChecks=new ConnectionChecks(engine,client,store,changed);
   client.on('notification', (method: string, params: any) => {
